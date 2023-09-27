@@ -18,6 +18,7 @@ limitations under the License.
 
 #include <cstdint>
 
+#include "absl/log/die_if_null.h"
 #include "tsl/platform/platform.h"
 #include "tsl/platform/types.h"
 
@@ -131,6 +132,73 @@ std::string LegacyUnredactedDebugString(
     const tsl::protobuf::MessageLite& message);
 std::string LegacyUnredactedShortDebugString(
     const tsl::protobuf::Message& message);
+
+// TODO(b/302086111): Remove after XLA has an updated protobuf version.
+#ifdef TSL_IS_IN_OSS
+template <typename T>
+const T* DynamicCastMessage(const proto2::MessageLite* from) {
+  static_assert(std::is_base_of_v<proto2::MessageLite, T>);
+  return dynamic_cast<const T*>(from);
+}
+
+template <typename T>
+const T& DynamicCastMessage(const proto2::MessageLite& from) {
+  const T* destination_message = DynamicCastMessage<T>(&from);
+#if defined(ABSL_HAVE_EXCEPTIONS)
+  if (ABSL_PREDICT_FALSE(destination_message == nullptr)) {
+    // If exceptions are enabled, throw.
+    // Otherwise, log a fatal error.
+    throw std::bad_cast();
+  }
+#endif
+  return *ABSL_DIE_IF_NULL(destination_message);  // Crash OK
+}
+
+template <typename T>
+T& DynamicCastMessage(proto2::MessageLite& from) {
+  return const_cast<T&>(
+      DynamicCastMessage<T>(static_cast<const proto2::MessageLite&>(from)));
+}
+
+template <typename T>
+const T* DownCastMessage(const proto2::MessageLite* from) {
+  ABSL_DCHECK(DynamicCastMessage<T>(*from) == from)
+      << "Cannot downcast " << from->GetTypeName() << " to "
+      << T::default_instance().GetTypeName();
+  return static_cast<const T*>(from);
+}
+
+template <typename T>
+T* DownCastMessage(proto2::MessageLite* from) {
+  return const_cast<T*>(
+      DownCastMessage<T>(static_cast<const proto2::MessageLite*>(from)));
+}
+
+template <typename T>
+const T& DownCastMessage(const proto2::MessageLite& from) {
+  return *DownCastMessage<T>(&from);
+}
+
+template <typename T>
+T& DownCastMessage(proto2::MessageLite& from) {
+  return *DownCastMessage<T>(&from);
+}
+
+template <>
+inline const proto2::MessageLite* DynamicCastMessage(
+    const proto2::MessageLite* from) {
+  return from;
+}
+template <>
+inline const proto2::MessageLite* DownCastMessage(
+    const proto2::MessageLite* from) {
+  return from;
+}
+#else
+using ::proto2::DownCastMessage;
+using ::proto2::DynamicCastMessage;
+#endif
+
 }  // namespace tsl
 
 #endif  // TENSORFLOW_TSL_PLATFORM_PROTOBUF_H_
