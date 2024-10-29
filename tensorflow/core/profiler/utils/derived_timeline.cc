@@ -25,6 +25,7 @@ limitations under the License.
 #include "absl/strings/match.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
+#include "absl/types/span.h"
 #include "xla/tsl/profiler/convert/xla_op_utils.h"
 #include "xla/tsl/profiler/utils/group_events.h"
 #include "xla/tsl/profiler/utils/tf_op_utils.h"
@@ -119,13 +120,19 @@ void ProcessTfOpEvent(absl::string_view tf_op_full_name,
                                       group_id);
 }
 
-DerivedXEventBuilder::DerivedXEventBuilder(XEventBuilder event,
-                                           std::optional<int64_t> group_id)
-    : event_(std::move(event)), group_id_(group_id) {}
+DerivedXEventBuilder::DerivedXEventBuilder(
+    XEventBuilder event, std::optional<int64_t> group_id,
+    std::optional<int64_t> scope_range_id)
+    : event_(std::move(event)),
+      group_id_(group_id),
+      scope_range_id_(scope_range_id) {}
 
-bool DerivedXEventBuilder::ShouldExpand(const XEventMetadata& event_metadata,
-                                        std::optional<int64_t> group_id) const {
-  return event_.MetadataId() == event_metadata.id() && group_id_ == group_id;
+bool DerivedXEventBuilder::ShouldExpand(
+    const XEventMetadata& event_metadata, std::optional<int64_t> group_id,
+    std::optional<int64_t> scope_range_id) const {
+  return event_.MetadataId() == event_metadata.id() && group_id_ == group_id &&
+         (!scope_range_id.has_value() || !scope_range_id_.has_value() ||
+          scope_range_id_ == scope_range_id);
 }
 
 void DerivedXEventBuilder::Expand(tsl::profiler::Timespan event_span) {
@@ -150,30 +157,36 @@ DerivedXLineBuilder::DerivedXLineBuilder(
   line_.SetTimestampNs(timestamp_ns);
 }
 
-void DerivedXLineBuilder::ExpandOrAddEvent(const XEventMetadata& event_metadata,
-                                           tsl::profiler::Timespan event_span,
-                                           std::optional<int64_t> group_id) {
-  ExpandOrAddLevelEvent(event_metadata, event_span, group_id,
+void DerivedXLineBuilder::ExpandOrAddEvent(
+    const XEventMetadata& event_metadata, tsl::profiler::Timespan event_span,
+    std::optional<int64_t> group_id, std::optional<int64_t> scope_range_id) {
+  ExpandOrAddLevelEvent(event_metadata, event_span, group_id, scope_range_id,
                         /*level=*/0);
 }
 
 void DerivedXLineBuilder::ExpandOrAddEvents(
     const std::vector<XEventMetadata*>& events_metadata_per_level,
-    tsl::profiler::Timespan event_span, std::optional<int64_t> group_id) {
+    tsl::profiler::Timespan event_span, std::optional<int64_t> group_id,
+    absl::Span<std::optional<int64_t>> scope_range_ids) {
   if (events_metadata_per_level.empty()) return;
+
   size_t current_nested_level = events_metadata_per_level.size();
   for (size_t level = 0; level < current_nested_level; ++level) {
-    ExpandOrAddLevelEvent(*events_metadata_per_level[level], event_span,
-                          group_id, level);
+    ExpandOrAddLevelEvent(
+        *events_metadata_per_level[level], event_span, group_id,
+        level < scope_range_ids.size() ? scope_range_ids[level] : std::nullopt,
+        level);
   }
   ResetLastEvents(current_nested_level);
 }
 
 void DerivedXLineBuilder::ExpandOrAddLevelEvent(
     const XEventMetadata& event_metadata, tsl::profiler::Timespan event_span,
-    std::optional<int64_t> group_id, int level) {
+    std::optional<int64_t> group_id, std::optional<int64_t> scope_range_id,
+    int level) {
   auto& last_event = last_event_by_level_[level];
-  if (last_event && last_event->ShouldExpand(event_metadata, group_id)) {
+  if (last_event &&
+      last_event->ShouldExpand(event_metadata, group_id, scope_range_id)) {
     // Expand the last event to cover the given event.
     last_event->Expand(event_span);
   } else {
@@ -185,7 +198,7 @@ void DerivedXLineBuilder::ExpandOrAddLevelEvent(
     if (group_id.has_value()) {
       event.AddStatValue(*group_id_stat_metadata_, *group_id);
     }
-    last_event.emplace(std::move(event), group_id);
+    last_event.emplace(std::move(event), group_id, scope_range_id);
   }
 }
 
@@ -286,7 +299,8 @@ void DeriveStepEventsFromGroups(
 }
 
 void DeriveEventsFromAnnotations(const SymbolResolver& symbol_resolver,
-                                 XPlane* device_trace) {
+                                 XPlane* device_trace,
+                                 const ScopeRangeIdTree* scope_range_id_tree) {
   XPlaneVisitor plane_visitor =
       tsl::profiler::CreateTfXPlaneVisitor(device_trace);
   XPlaneBuilder plane_builder(device_trace);
@@ -304,6 +318,7 @@ void DeriveEventsFromAnnotations(const SymbolResolver& symbol_resolver,
   DerivedXLineBuilder source(&plane_builder, kThreadIdSource, kSourceLineName,
                              start_timestamp_ns, {});
 
+  std::vector<std::optional<int64_t>> level_range_ids;
   for (const XEventVisitor& event :
        GetSortedEvents<XEventVisitor>(plane_visitor)) {
     GpuEventStats stats(&event);
@@ -313,10 +328,24 @@ void DeriveEventsFromAnnotations(const SymbolResolver& symbol_resolver,
     if (!stats.IsKernel() && !stats.IsCudaGraphExecution()) continue;
     tsl::profiler::Timespan event_span = event.GetTimespan();
 
+    if (scope_range_id_tree != nullptr &&
+        (!stats.hlo_module_name.empty() || stats.IsXlaOp())) {
+      level_range_ids.clear();
+      for (auto range_id = stats.scope_range_id; range_id.has_value();) {
+        level_range_ids.push_back(*range_id);
+        auto it = scope_range_id_tree->find(*range_id);
+        range_id = (it != scope_range_id_tree->end())
+                       ? std::optional<int64_t>(it->second)
+                       : std::nullopt;
+      }
+      std::reverse(level_range_ids.begin(), level_range_ids.end());
+    }
+
     if (!stats.hlo_module_name.empty()) {
       hlo_modules.ExpandOrAddEvent(
           *plane_builder.GetOrCreateEventMetadata(HloModuleEventName(stats)),
-          event_span, stats.group_id);
+          event_span, stats.group_id,
+          level_range_ids.empty() ? std::nullopt : level_range_ids.front());
     }
 
     if (stats.IsXlaOp()) {
@@ -324,8 +353,13 @@ void DeriveEventsFromAnnotations(const SymbolResolver& symbol_resolver,
                                     stats.hlo_op_names.back());
       auto hlo_events_metadata =
           GetOrCreateHloOpEventsMetadata(plane_builder, stats, symbol);
-      hlo_ops.ExpandOrAddEvents(hlo_events_metadata, event_span,
-                                stats.group_id);
+      // Align the tail of hlo_events_metadata with the tail of level_range_ids.
+      size_t len = std::min(level_range_ids.size(), hlo_events_metadata.size());
+      hlo_ops.ExpandOrAddEvents(
+          hlo_events_metadata, event_span, stats.group_id,
+          absl::Span<std::optional<int64_t>>{
+              level_range_ids.data() + (level_range_ids.size() - len), len});
+
       // If the kernel event is nodes of a CudaGraph or a whole cuda graph
       // exec, try to mark extra stats to to corresponding XLA op event here.
       if (stats.cuda_graph_id_for_inner_node.has_value() &&
@@ -470,11 +504,22 @@ void GenerateDerivedTimeLines(
     return output;
   };
 
+  ScopeRangeIdTree scope_range_id_tree;
+  const XPlane* namespace_tree_plane =
+      FindPlaneWithName(*space, tsl::profiler::kScopeRangeIdTreePlaneName);
+  if (namespace_tree_plane) {
+    XPlaneVisitor namespace_tree_visitor =
+        tsl::profiler::CreateTfXPlaneVisitor(namespace_tree_plane);
+    namespace_tree_visitor.ForEachStat([&](const XStatVisitor& stat) {
+      scope_range_id_tree.emplace(stat.Id(), stat.IntValue());
+    });
+  }
+
   std::vector<XPlane*> device_planes =
       FindMutablePlanesWithPrefix(space, kGpuPlanePrefix);
   for (XPlane* plane : device_planes) {
     DeriveStepEventsFromGroups(group_metadata_map, plane);
-    DeriveEventsFromAnnotations(symbol_resolver, plane);
+    DeriveEventsFromAnnotations(symbol_resolver, plane, &scope_range_id_tree);
   }
 
   const XPlane* host_plane = FindPlaneWithName(*space, kHostThreadsPlaneName);
