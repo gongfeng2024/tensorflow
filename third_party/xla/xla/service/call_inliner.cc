@@ -160,6 +160,14 @@ bool InlineComposites(
              instruction->frontend_attributes().map().at("composite.name"));
 }
 
+bool InlineComposites(
+    HloInstruction* instruction,
+    const absl::flat_hash_set<std::string>& composites_to_preserve) {
+  return !instruction->is_composite() ||
+         !composites_to_preserve.contains(
+             instruction->frontend_attributes().map().at("composite.name"));
+}
+
 }  // namespace
 
 /* static */ absl::StatusOr<CallInliner::InlinedInstructionMap>
