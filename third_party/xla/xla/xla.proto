@@ -1002,11 +1002,6 @@ message DebugOptions {
   // DotMerger pass threshold size to be used in MB.
   int32 xla_gpu_dot_merger_threshold_mb = 331;
 
-  // If enabled, in the absence of user provided knobs might tune pass
-  // configurations based on the HLO. For example it decides to unroll the while
-  // loop by a factor of two if a collective op is present.
-  bool xla_gpu_enable_heuristic_pass_configuration = 332;
-
   // This controls how many in-flight collectives latency hiding scheduler
   // can schedule. Example usage:
   // With xla_gpu_experimental_parallel_collective_overlap_limit = 1:
@@ -1054,7 +1049,9 @@ message DebugOptions {
   // xla_gpu_enable_persistent_temp_buffers
   // xla_gpu_enable_triton_gemm_int4
   // xla_gpu_enable_priority_fusion
-  reserved 5, 117, 133, 139, 176, 178, 180, 193, 214, 194, 221, 242, 206, 320;
+  // xla_gpu_enable_heuristic_pass_configuration
+  reserved 5, 117, 133, 139, 176, 178, 180, 193, 214, 194, 221, 242, 206, 320,
+      332;
 }
 
 // Contains flags which affects the GPU compilation result.

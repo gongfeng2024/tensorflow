@@ -451,7 +451,8 @@ absl::StatusOr<ScheduleMetadata> ScheduleGpuModule(
 
   const DebugOptions& options = module->config().debug_options();
   const bool enable_latency_hiding_scheduler =
-      options.xla_gpu_enable_latency_hiding_scheduler();
+      options.xla_gpu_enable_latency_hiding_scheduler() ||
+      module->config().exec_time_optimization_effort() >= 0.2;
 
   if (!enable_latency_hiding_scheduler) {
     return ScheduleMetadata{memory_limit};
