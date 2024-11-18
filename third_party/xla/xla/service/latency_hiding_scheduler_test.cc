@@ -2604,8 +2604,9 @@ TEST_F(LatencyHidingSchedulerTest, AsyncTrackerTestForTargetDefinedResources) {
   // Extend AsyncTracker for a fake target with one target-defined resource
   class AsyncTrackerForMyTarget : public AsyncTracker {
     enum class MyTargetResourceType {
-      kTargetResource0 = 0,
-      kNumTargetResources = 1,
+      kTargetResource0 =
+          ResourceTypeToIndex(ResourceType::kTargetResourceTypeStart),
+      kTargetResourceTypeEnd,
     };
 
    public:
@@ -2615,13 +2616,13 @@ TEST_F(LatencyHidingSchedulerTest, AsyncTrackerTestForTargetDefinedResources) {
           target_resource0_limit_(target_resource0_limit) {}
 
     absl::string_view GetResourceName(int64_t resource_type) const override {
-      const int64_t first_target_resource = GetFirstTargetDefinedResource();
-      if (resource_type < first_target_resource) {
+      CHECK_LT(
+          resource_type,
+          ResourceTypeToIndex(MyTargetResourceType::kTargetResourceTypeEnd));
+      if (resource_type < GetTargetResourceTypeStart()) {
         return AsyncTracker::GetResourceName(resource_type);
       }
-      CHECK_LE(resource_type,
-               first_target_resource + GetNumTargetDefinedResources());
-      switch (resource_type - first_target_resource) {
+      switch (resource_type) {
         case static_cast<int64_t>(MyTargetResourceType::kTargetResource0):
           return "kTargetResource0";
         default:
@@ -2631,13 +2632,13 @@ TEST_F(LatencyHidingSchedulerTest, AsyncTrackerTestForTargetDefinedResources) {
 
     ResourceHazardType GetResourceHazardType(
         int64_t resource_type) const override {
-      const int64_t first_target_resource = GetFirstTargetDefinedResource();
-      if (resource_type < first_target_resource) {
+      CHECK_LT(
+          resource_type,
+          ResourceTypeToIndex(MyTargetResourceType::kTargetResourceTypeEnd));
+      if (resource_type < GetTargetResourceTypeStart()) {
         return AsyncTracker::GetResourceHazardType(resource_type);
       }
-      CHECK_LE(resource_type,
-               first_target_resource + GetNumTargetDefinedResources());
-      switch (resource_type - first_target_resource) {
+      switch (resource_type) {
         case static_cast<int64_t>(MyTargetResourceType::kTargetResource0):
           return ResourceHazardType::kShareable;
         default:
@@ -2645,19 +2646,21 @@ TEST_F(LatencyHidingSchedulerTest, AsyncTrackerTestForTargetDefinedResources) {
       }
     }
 
-    int64_t GetNumTargetDefinedResources() const override {
-      return static_cast<int64_t>(MyTargetResourceType::kNumTargetResources);
+    int64_t GetNumTargetResources() const override {
+      return ResourceTypeToIndex(MyTargetResourceType::kTargetResourceTypeEnd) -
+             ResourceTypeToIndex(ResourceType::kTargetResourceTypeStart);
     }
 
     int64_t GetNumAvailableResources(int64_t resource_type) const override {
-      const int64_t first_target_resource =
-          AsyncTracker::GetFirstTargetDefinedResource();
-      CHECK_GE(resource_type, first_target_resource);
-      CHECK_LT(resource_type,
-               first_target_resource + GetNumTargetDefinedResources());
-      switch (resource_type - first_target_resource) {
+      CHECK_LT(
+          resource_type,
+          ResourceTypeToIndex(MyTargetResourceType::kTargetResourceTypeEnd));
+      if (resource_type < GetTargetResourceTypeStart()) {
+        return AsyncTracker::GetNumAvailableResources(resource_type);
+      }
+      switch (resource_type) {
         case (static_cast<int64_t>(MyTargetResourceType::kTargetResource0)):
-          return static_cast<int64_t>(target_resource0_limit_);
+          return target_resource0_limit_;
         default:
           return 1;
       }
@@ -2672,10 +2675,10 @@ TEST_F(LatencyHidingSchedulerTest, AsyncTrackerTestForTargetDefinedResources) {
   AsyncTrackerForMyTarget async_tracker_for_my_target(
       SchedulerConfig(), target_resource0_overlap_limit);
   // Check the number of target-defined resources
-  CHECK_EQ(async_tracker_for_my_target.GetNumTargetDefinedResources(), 1);
+  CHECK_EQ(async_tracker_for_my_target.GetNumTargetResources(), 1);
   // Get the index of the target-defined resource
   const int64_t target_resource0_index =
-      static_cast<int64_t>(ResourceType::kTargetDefinedResourcesBound) + 1;
+      ResourceTypeToIndex(ResourceType::kTargetResourceTypeStart);
   // Check the name of the target-defined resource
   CHECK_EQ(async_tracker_for_my_target.GetResourceName(target_resource0_index),
            "kTargetResource0");
@@ -3161,7 +3164,7 @@ ENTRY %module {
         return ResourceHazardType::kSelective;
       }
       // The first target defined resource is defined as non-extendable.
-      if (resource_type == AsyncTracker::GetFirstTargetDefinedResource()) {
+      if (resource_type == AsyncTracker::GetTargetResourceTypeStart()) {
         return ResourceHazardType::kNonextendable;
       }
       return AsyncTracker::GetResourceHazardType(resource_type);
@@ -3173,7 +3176,7 @@ ENTRY %module {
           AsyncTracker::GetResourcesFromInstructionImpl(hlo);
       // There is only one target defined resource (which is non-extendable).
       if (hlo.opcode() == HloOpcode::kAllGatherStart) {
-        result.push_back({AsyncTracker::GetFirstTargetDefinedResource(),
+        result.push_back({AsyncTracker::GetTargetResourceTypeStart(),
                           ResourceUsageType::kResourceRelease});
       }
       return result;

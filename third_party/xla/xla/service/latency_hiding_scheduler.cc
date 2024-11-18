@@ -431,12 +431,12 @@ void AsyncTracker::SetConcurrentResourceLimits(
       config_.send_recv_host_overlap_limit;
   max_concurrent_resource[ResourceTypeToIndex(ResourceType::kRecvHost)] =
       config_.send_recv_host_overlap_limit;
-  // Set the limits for target-defined resources
-  const int64_t first_target_resource =
-      AsyncTracker::GetFirstTargetDefinedResource();
-  for (int64_t i = 0; i < GetNumTargetDefinedResources(); ++i) {
-    max_concurrent_resource[first_target_resource + i] =
-        GetNumAvailableResources(first_target_resource + i);
+  // Set the limits for target-defined resources.
+  for (int32_t resource_type = GetTargetResourceTypeStart();
+       resource_type < GetTargetResourceTypeStart() + GetNumTargetResources();
+       ++resource_type) {
+    max_concurrent_resource[resource_type] =
+        GetNumAvailableResources(resource_type);
   }
 }
 
@@ -493,7 +493,7 @@ absl::string_view AsyncTracker::GetResourceUsageName(
   }
 }
 
-int64_t AsyncTracker::GetNumTargetDefinedResources() const { return 0; }
+int64_t AsyncTracker::GetNumTargetResources() const { return 0; }
 
 int64_t AsyncTracker::GetNumAvailableResources(int64_t resource_type) const {
   return 0;
