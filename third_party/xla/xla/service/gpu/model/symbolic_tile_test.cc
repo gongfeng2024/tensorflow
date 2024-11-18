@@ -593,6 +593,27 @@ TEST_F(SymbolicTileTest, CanPropagateTileThroughSummationOfSymbols) {
       )")));
 }
 
+TEST_F(SymbolicTileTest, CanPropagateTileModAndFloorDiv) {
+  // Such an indexing map is representative of a HLOs with a rank-reducing
+  // bitcast, i.e. something like
+  //   p0 = f32[3,5,7]{2,1,0} parameter(0)
+  //   bitcast = f32[105]{0} bitcast(p0)
+  IndexingMap indexing_map = IndexingMap::FromTensorSizes(
+      ParseAffineMap(
+          "(d0) -> (d0 floordiv 35, (d0 floordiv 7) mod 5, d0 mod 7)",
+          &mlir_context_),
+      {105}, {});
+
+  EXPECT_THAT(SymbolicTile::FromIndexingMap(indexing_map),
+              Optional(MatchSymbolicTileString(R"(
+      Symbolic tile with
+        offset_map: (d0) -> (0, 0, 0)
+        size_map: (d0) -> ((d0 + 34) floordiv 35, (d0 + 6) floordiv 7 - ((d0 - 1) floordiv 35) * 5, d0 - ((d0 - 1) floordiv 7) * 7)
+        stride_map: (d0) -> (1, 1, 1)
+        constraints: 5 mod (d0 floordiv 7) in [0, 0] && 7 mod d0 in [0, 0] && d0 mod 7 in [0, 0] || 5 mod (d0 floordiv 7) in [0, 0] && d0 mod 7 in [0, 0] || 7 mod d0 in [0, 0] || 7 mod d0 in [0, 0] && d0 mod 35 in [0, 0] || 7 mod d0 in [0, 0] && d0 mod 7 in [0, 0] || d0 mod 35 in [0, 0] && d0 mod 7 in [0, 0]
+      )")));
+}
+
 TEST_F(SymbolicTileTest,
        FailsGracefullyAtPropagatingTileThroughSliceOfSplitReshape) {
   // TODO(b/349487906): constraints should allow us to unblock this use case.
