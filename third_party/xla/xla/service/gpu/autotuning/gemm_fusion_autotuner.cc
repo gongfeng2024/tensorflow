@@ -902,10 +902,15 @@ GemmFusionAutotunerImpl::GenerateTritonConfigs(const HloDotInstruction& dot) {
 
     // TODO(b/337839570): Triton currently has a limitation where it crashes
     // on small block_k values depending on the bit-width of the inputs to the
-    // dot. The logic below accounts for this limitation.
+    // dot. The logic below accounts for this limitation. Currently, FP8
+    // benchmarks such as the one here b/370476661 fail unless we also restrict
+    // the block_m value. This requires further investigation if we need to
+    // remove the restriction on block_m.
     constexpr int kLdmatrixGranularity = 256;
     config.block_k =
         std::max(config.block_k, kLdmatrixGranularity / minBitWidth);
+    config.block_m =
+        std::max(config.block_m, kLdmatrixGranularity / minBitWidth);
 
     // Sparse meta should have at least one element per thread.
     // Note: only 2:4 structured sparsity is currently supported.
