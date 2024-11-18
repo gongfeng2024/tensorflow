@@ -104,8 +104,11 @@ exhaustive_xla_test(
         "gpu": ["notsan"],
     },
     backends = [
-        "gpu",
         "cpu",
+        "gpu_p100",
+        "gpu_v100",
+        "gpu_a100",
+        "gpu_h100",
     ],
     # Partition goal is to get under ~5 minute execution time without needlessly reserving hardware
     # for each shard.
@@ -159,8 +162,11 @@ xla_test(
         "gpu": ["notsan"],
     },
     backends = [
-        "gpu",
         "cpu",
+        "gpu_p100",
+        "gpu_v100",
+        "gpu_a100",
+        "gpu_h100",
     ],
     shard_count = 50,
     tags = [
@@ -210,8 +216,11 @@ exhaustive_xla_test(
         "gpu": ["notsan"],
     },
     backends = [
-        "gpu",
         "cpu",
+        "gpu_p100",
+        "gpu_v100",
+        "gpu_a100",
+        "gpu_h100",
     ],
     # Partition goal is to get under ~5 minute execution time without needlessly reserving hardware
     # for each shard.
