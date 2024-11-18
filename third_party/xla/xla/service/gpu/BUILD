@@ -1478,6 +1478,7 @@ cc_library(
         "@llvm-project//mlir:Support",
         "//xla/hlo/analysis:hlo_dataflow_analysis",
         "//xla/hlo/analysis:hlo_ordering",
+        "//xla/hlo/experimental/auto_sharding:auto_sharding_option",
         "//xla/hlo/ir:hlo",
         "//xla/hlo/ir:hlo_module_group",
         "//xla/hlo/pass:hlo_pass",

@@ -451,6 +451,16 @@ ENTRY main {
             HloOpcode::kAllGatherDone);
 }
 
+TEST_F(GpuCompilerTest, AutoShardingDefaultMeshShape) {
+  HloModuleConfig config;
+  config.set_num_partitions(5);
+  auto option = internal::GetAutoShardingOption(config);
+  EXPECT_EQ(option.device_mesh_shape, std::vector<int64_t>({5, 1}));
+  config.set_auto_spmd_partitioning_mesh_shape({2, 3});
+  option = internal::GetAutoShardingOption(config);
+  EXPECT_EQ(option.device_mesh_shape, std::vector<int64_t>({2, 3}));
+}
+
 class GpuCompilerTestWithAutotuneDb : public GpuCompilerTest {
  public:
   static void SetUpTestSuite() {

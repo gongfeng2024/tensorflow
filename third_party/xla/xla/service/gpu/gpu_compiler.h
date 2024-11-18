@@ -27,6 +27,7 @@ limitations under the License.
 #include "llvm/IR/Module.h"
 #include "xla/autotune_results.pb.h"
 #include "xla/hlo/analysis/hlo_dataflow_analysis.h"
+#include "xla/hlo/experimental/auto_sharding/auto_sharding_option.h"
 #include "xla/hlo/ir/hlo_module.h"
 #include "xla/hlo/ir/hlo_module_group.h"
 #include "xla/hlo/pass/hlo_pass_pipeline.h"
@@ -259,6 +260,11 @@ class GpuCompiler : public LLVMCompiler {
   GpuCompiler(const GpuCompiler&) = delete;
   GpuCompiler& operator=(const GpuCompiler&) = delete;
 };
+
+// Internal functions exposed for testing only, do not use.
+namespace internal {
+AutoShardingOption GetAutoShardingOption(const HloModuleConfig& config);
+}  // namespace internal
 
 }  // namespace gpu
 }  // namespace xla

@@ -61,6 +61,7 @@ limitations under the License.
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/Support/LLVM.h"
 #include "xla/hlo/analysis/hlo_dataflow_analysis.h"
+#include "xla/hlo/experimental/auto_sharding/auto_sharding_option.h"
 #include "xla/hlo/ir/hlo_casting_utils.h"
 #include "xla/hlo/ir/hlo_computation.h"
 #include "xla/hlo/ir/hlo_instruction.h"
@@ -480,6 +481,29 @@ GpuCompiler::GpuCompiler(se::Platform::Id platform_id,
       pointer_size_(llvm::DataLayout(data_layout)
                         .getPointerSize(0 /* default address space */)) {}
 
+namespace internal {
+AutoShardingOption GetAutoShardingOption(const HloModuleConfig& config) {
+  AutoShardingOption option;
+  option.enable = true;
+  if (!config.auto_spmd_partitioning_mesh_shape().empty()) {
+    option.device_mesh_shape = config.auto_spmd_partitioning_mesh_shape();
+  } else {
+    // Use a simple mesh shape if not specified.
+    option.device_mesh_shape = {config.num_partitions(), 1};
+  }
+  if (!config.auto_spmd_partitioning_mesh_ids().empty()) {
+    option.device_mesh_ids = config.auto_spmd_partitioning_mesh_ids();
+  }
+  option.memory_budget_per_device =
+      config.debug_options().xla_gpu_auto_spmd_partitioning_memory_budget_gb() *
+      1024 * 1024 * 1024;
+  option.memory_budget_ratio =
+      config.debug_options()
+          .xla_gpu_auto_spmd_partitioning_memory_budget_ratio();
+  return option;
+}
+}  // namespace internal
+
 namespace {
 // Adds the HloVerifier for GPU to the given pipeline.
 void AddHloVerifier(HloPassPipeline* pipeline,
@@ -601,43 +625,17 @@ absl::Status RunSPMDPasses(
           num_partitions);
     }
     HloPassPipeline spmd_pipeline("spmd-partitioner");
-    AddSPMDPasses(
-        hlo_module, layout_insensitive_algsimp_opts,
-        gpu_target_config.device_description.gpu_compute_capability(),
-        spmd_pipeline,
+    AddSPMDPasses(hlo_module, layout_insensitive_algsimp_opts,
+                  gpu_target_config.device_description.gpu_compute_capability(),
+                  spmd_pipeline,
 #ifdef PLATFORM_GOOGLE
-        [&](HloPassPipeline& pipeline) {
-          if (auto_sharding) {
-            AutoShardingOption option;
-            option.enable = true;
-            if (!hlo_module->config()
-                     .auto_spmd_partitioning_mesh_shape()
-                     .empty()) {
-              option.device_mesh_shape =
-                  hlo_module->config().auto_spmd_partitioning_mesh_shape();
-            } else {
-              // Use a simple mesh shape if not specified.
-              option.device_mesh_shape = {
-                  gpu_target_config.device_description.core_count(), 1};
-            }
-            if (!hlo_module->config()
-                     .auto_spmd_partitioning_mesh_ids()
-                     .empty()) {
-              option.device_mesh_ids =
-                  hlo_module->config().auto_spmd_partitioning_mesh_ids();
-            }
-            option.memory_budget_per_device =
-                hlo_module->config()
-                    .debug_options()
-                    .xla_gpu_auto_spmd_partitioning_memory_budget_gb() *
-                1024 * 1024 * 1024;
-            option.memory_budget_ratio =
-                hlo_module->config()
-                    .debug_options()
-                    .xla_gpu_auto_spmd_partitioning_memory_budget_ratio();
-            spmd_pipeline.AddPass<AutoSharding>(option);
-          }
-        });
+                  [&](HloPassPipeline& pipeline) {
+                    if (auto_sharding) {
+                      AutoShardingOption option =
+                          internal::GetAutoShardingOption(hlo_module->config());
+                      spmd_pipeline.AddPass<AutoSharding>(option);
+                    }
+                  });
 #else
         std::nullopt);
 #endif  // PLATFORM_GOOGLE
