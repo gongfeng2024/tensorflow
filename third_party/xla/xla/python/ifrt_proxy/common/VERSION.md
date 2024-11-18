@@ -1,5 +1,7 @@
 # IFRT Proxy Protocol Versions
 
+** This file is outdated. Please refer to versions.h.**
+
 ## Version 1
 
 *   Added date: 2023-12-20.
@@ -59,3 +61,6 @@
 *   Added date: 2024-11-08.
 *   Changes:
     *   MakeArrayFromHostBuffer uses client-manufactured array handles and sends data asynchronously.
+
+
+** This file is outdated. Please add further versions to versions.h.**
