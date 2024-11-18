@@ -49,9 +49,9 @@ namespace xla {
 namespace spmd {
 namespace {
 using hlo_sharding_util::GroupedSharding;
-PartitioningMethod gather_partition_method = PartitioningMethod::kIndexParallel;
+PartitioningMethod gather_partition_method = PartitioningMethod::kExplicitBatch;
 PartitioningMethod scatter_partition_method =
-    PartitioningMethod::kIndexParallel;
+    PartitioningMethod::kExplicitBatch;
 
 // Generates per-group partitioned hlo based on given grouped sharding.
 PartitionedHlo PerGroupPartitionedHlo(
@@ -813,8 +813,7 @@ std::pair<int64_t, int64_t> GatherPartitionMethodCostModel(
       GetGatherPartitionMethod(gather_partition_method);
   if (partition_method == zero_cost_method) {
     // Always prioritize the user's chosen partitioning, and assume it has zero
-    // cost.
-    // This defaults to IndexParallel.
+    // cost. This defaults to ExplicitBatch.
     return {0, 0};
   }
   return EvaluatePartitionCost(gather, partition_method, gather, operand,
@@ -849,13 +848,7 @@ std::vector<decltype(PartitionGather)*> GatherPartitionMethodsOrderedByCost(
   }
   absl::c_sort(ordered_partition_methods, [&](decltype(PartitionGather)* lhs,
                                               decltype(PartitionGather)* rhs) {
-    auto [lhs_memory_cost, lhs_communication_cost] =
-        partition_method_costs[lhs];
-    auto [rhs_memory_cost, rhs_communication_cost] =
-        partition_method_costs[rhs];
-    return lhs_memory_cost != rhs_memory_cost
-               ? lhs_memory_cost < rhs_memory_cost
-               : lhs_communication_cost < rhs_communication_cost;
+    return partition_method_costs[lhs] < partition_method_costs[rhs];
   });
   VLOG(5) << "Gather partitioning methods(ordered by cost):";
   for (auto partition_method : ordered_partition_methods) {
@@ -1704,13 +1697,7 @@ std::vector<decltype(PartitionScatter)*> ScatterPartitionMethodsOrderedByCost(
   }
   absl::c_sort(ordered_partition_methods, [&](decltype(PartitionScatter)* lhs,
                                               decltype(PartitionScatter)* rhs) {
-    auto [lhs_memory_cost, lhs_communication_cost] =
-        partition_method_costs[lhs];
-    auto [rhs_memory_cost, rhs_communication_cost] =
-        partition_method_costs[rhs];
-    return lhs_memory_cost != rhs_memory_cost
-               ? lhs_memory_cost < rhs_memory_cost
-               : lhs_communication_cost < rhs_communication_cost;
+    return partition_method_costs[lhs] < partition_method_costs[rhs];
   });
   VLOG(5) << "Scatter partitioning methods(ordered by cost):";
   for (auto partition_method : ordered_partition_methods) {
