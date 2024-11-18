@@ -128,6 +128,7 @@ cc_library(
         "@local_tsl//tsl/platform:macros",
         "@local_tsl//tsl/platform:types",
         "@local_tsl//tsl/profiler/lib:context_types_hdrs",
+        "@local_tsl//tsl/profiler/protobuf:profiler_options_proto_cc",
     ],
 )
 

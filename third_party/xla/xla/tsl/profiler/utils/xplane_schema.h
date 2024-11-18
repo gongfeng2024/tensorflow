@@ -542,6 +542,9 @@ TF_CONST_INIT extern const absl::string_view kThreadpoolListenerStartRegion;
 TF_CONST_INIT extern const absl::string_view kThreadpoolListenerStopRegion;
 TF_CONST_INIT extern const absl::string_view kThreadpoolListenerRegion;
 
+// Bitmask constants for TraceMe filter_mask.
+TF_CONST_INIT extern const uint64_t kTraceMemoryFilterMask;
+
 }  // namespace profiler
 }  // namespace tsl
 

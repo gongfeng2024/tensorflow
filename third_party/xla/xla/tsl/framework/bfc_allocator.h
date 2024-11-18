@@ -22,6 +22,7 @@ limitations under the License.
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -34,6 +35,7 @@ limitations under the License.
 #include "xla/tsl/framework/allocator_retry.h"
 #include "xla/tsl/framework/shared_counter.h"
 #include "xla/tsl/lib/core/bits.h"
+#include "xla/tsl/profiler/utils/xplane_schema.h"
 #include "tsl/platform/logging.h"
 #include "tsl/platform/numbers.h"
 #include "tsl/platform/strcat.h"
@@ -44,6 +46,11 @@ class MemoryDump;
 }
 namespace tsl {
 using tensorflow::MemoryDump;
+
+// #ifdef LIBTPU_ON_GCE
+// const uint64_t MemoryTraceMeFilterMask =
+// std::numeric_limits<uint64_t>::max(); #else const uint64_t
+// MemoryTraceMeFilterMask = tsl::profiler::kTraceMemoryFilterMask; #endif
 
 // A memory allocator that implements a 'best-fit with coalescing'
 // algorithm.  This is essentially a very simple version of Doug Lea's
@@ -149,12 +156,16 @@ class BFCAllocator : public Allocator {
   // Add TraceMe (in memory allocation and deallocation) for memory stats
   // profiling. The chunk_ptr is passed to get information such as address,
   // chunk size and requested_size.
-  void AddTraceMe(absl::string_view traceme_name, const void* ptr)
+  void AddTraceMe(
+      absl::string_view traceme_name, const void* ptr,
+      uint64_t kMemoryFilterMask = tsl::profiler::kTraceMemoryFilterMask)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
 
   // Overloaded AddTraceMe function with chunk information.
-  void AddTraceMe(absl::string_view traceme_name, const void* chunk_ptr,
-                  int64_t req_bytes, int64_t alloc_bytes)
+  void AddTraceMe(
+      absl::string_view traceme_name, const void* chunk_ptr, int64_t req_bytes,
+      int64_t alloc_bytes,
+      uint64_t kMemoryFilterMask = tsl::profiler::kTraceMemoryFilterMask)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
 
   // A ChunkHandle is an index into the chunks_ vector in BFCAllocator

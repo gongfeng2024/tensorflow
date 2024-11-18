@@ -86,3 +86,13 @@ message RemoteProfilerSessionManagerOptions {
   // Start of profiling is delayed by this much (in milliseconds).
   uint64 delay_ms = 5;
 }
+
+// Filters for TraceMe events. If a TraceMe event matches any of the
+// filters, it will be recorded.
+// Each enum value represents a bit in the filter bitmap.
+// The filter bitmap is uint64_t so the maximum number of filters is 64.
+// max id = 65
+enum TraceFilter {
+  TRACE_FILTER_UNSPECIFIED = 0;
+  TRACE_MEMORY = 1;
+}

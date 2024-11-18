@@ -526,14 +526,16 @@ double BFCAllocator::GetFragmentation() {
          bytes_available;
 }
 
-void BFCAllocator::AddTraceMe(absl::string_view traceme_name, const void* ptr) {
+void BFCAllocator::AddTraceMe(absl::string_view traceme_name, const void* ptr,
+                              uint64_t kMemoryFilterMask) {
   BFCAllocator::Chunk* chunk = ChunkFromHandle(region_manager_.get_handle(ptr));
-  AddTraceMe(traceme_name, chunk->ptr, chunk->requested_size, chunk->size);
+  AddTraceMe(traceme_name, chunk->ptr, chunk->requested_size, chunk->size,
+             kMemoryFilterMask);
 }
 
 void BFCAllocator::AddTraceMe(absl::string_view traceme_name,
                               const void* chunk_ptr, int64_t req_bytes,
-                              int64_t alloc_bytes) {
+                              int64_t alloc_bytes, uint64_t kMemoryFilterMask) {
   tsl::profiler::TraceMe::InstantActivity(
       [this, traceme_name, chunk_ptr, req_bytes, alloc_bytes]()
           ABSL_NO_THREAD_SAFETY_ANALYSIS {
@@ -563,7 +565,8 @@ void BFCAllocator::AddTraceMe(absl::string_view traceme_name,
                                {"data_type", annotation.pending_data_type},
                                {"shape", annotation.pending_shape_func()}});
           },
-      /*level=*/tsl::profiler::TraceMeLevel::kInfo);
+      /*level=*/tsl::profiler::TraceMeLevel::kInfo,
+      /*filter_mask=*/kMemoryFilterMask);
 }
 
 void* BFCAllocator::FindChunkPtr(BinNum bin_num, size_t rounded_bytes,

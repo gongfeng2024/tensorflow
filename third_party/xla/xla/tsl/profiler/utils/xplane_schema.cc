@@ -24,6 +24,7 @@ limitations under the License.
 #include "absl/types/optional.h"
 #include "xla/tsl/lib/gtl/map_util.h"
 #include "xla/tsl/profiler/utils/tf_op_utils.h"
+#include "tsl/profiler/protobuf/profiler_options.pb.h"
 
 namespace tsl {
 namespace profiler {
@@ -596,5 +597,8 @@ const absl::string_view kThreadpoolListenerStopRegion =
     "ThreadpoolListener::StopRegion";
 const absl::string_view kThreadpoolListenerRegion =
     "ThreadpoolListener::Region";
+
+const uint64_t kTraceMemoryFilterMask =
+    1ull << (tensorflow::TraceFilter::TRACE_MEMORY - 1);
 }  // namespace profiler
 }  // namespace tsl
