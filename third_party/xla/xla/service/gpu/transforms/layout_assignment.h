@@ -63,6 +63,12 @@ class GpuLayoutAssignment : public LayoutAssignment {
                                    absl::Span<const int64_t> row_dims,
                                    absl::Span<const int64_t> col_dims);
 
+  absl::Status SetDotOperandLayoutToMinorContracting(
+      const HloInstruction* instruction, int64_t operand,
+      absl::Span<const int64_t> batch_dims,
+      absl::Span<const int64_t> contracting_dims,
+      absl::Span<const int64_t> noncontracting_dims);
+
   absl::Status SetDotLayout(const HloInstruction* instruction,
                             LayoutConstraints* constraints);
 
