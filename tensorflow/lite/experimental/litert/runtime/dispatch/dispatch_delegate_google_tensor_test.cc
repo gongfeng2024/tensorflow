@@ -26,6 +26,7 @@
 #include "tensorflow/lite/experimental/litert/c/litert_common.h"
 #include "tensorflow/lite/experimental/litert/c/litert_dispatch_delegate.h"
 #include "tensorflow/lite/experimental/litert/c/litert_tensor_buffer.h"
+#include "tensorflow/lite/experimental/litert/cc/litert_compiled_model.h"
 #include "tensorflow/lite/experimental/litert/cc/litert_tensor_buffer.h"
 #include "tensorflow/lite/experimental/litert/runtime/external_litert_buffer_context.h"
 #include "tensorflow/lite/experimental/litert/test/common.h"
@@ -213,6 +214,66 @@ TEST(DispatchDelegate, GoogleTensorHwBuffer) {
   {
     auto lock_and_addr = litert::TensorBufferScopedLock::Create(output_buffer);
     ASSERT_TRUE(lock_and_addr);
+    const float* output = reinterpret_cast<const float*>(lock_and_addr->second);
+    for (auto i = 0; i < kTestOutputSize; ++i) {
+      ABSL_LOG(INFO) << "Result: " << output[i] << "\t" << kTestOutputTensor[i];
+    }
+    for (auto i = 0; i < kTestOutputSize; ++i) {
+      EXPECT_NEAR(output[i], kTestOutputTensor[i], 1e-5);
+    }
+  }
+}
+
+TEST(DispatchDelegate, CompiledModel) {
+  auto res_compiled_model = CompiledModel::CreateFromTflFileWithByteCode(
+      testing::GetTestFilePath(kTfliteFile),
+      testing::GetTestFilePath(kNpuFile));
+  ASSERT_TRUE(res_compiled_model) << "Failed to initialize CompiledModel";
+  auto& compiled_model = **res_compiled_model;
+
+  auto signatures = compiled_model.GetSignatures();
+  EXPECT_EQ(signatures.size(), 1);
+  EXPECT_EQ(signatures[0], CompiledModel::kDefaultSignatureKey);
+
+  auto input_buffers_res = compiled_model.CreateInputBuffers(signatures[0]);
+  EXPECT_TRUE(input_buffers_res.HasValue());
+  std::vector<TensorBuffer>& input_buffers = *input_buffers_res;
+
+  auto output_buffers_res = compiled_model.CreateOutputBuffers(signatures[0]);
+  EXPECT_TRUE(output_buffers_res.HasValue());
+  std::vector<TensorBuffer>& output_buffers = *output_buffers_res;
+
+  // Fill model inputs.
+  auto input_names = compiled_model.GetInputNames(signatures[0]);
+  EXPECT_EQ(input_names.size(), 2);
+  EXPECT_STREQ(input_names[0], "arg0");
+  EXPECT_STREQ(input_names[1], "arg1");
+  auto& input_0_buffer = input_buffers[0];
+  {
+    auto lock_and_addr = litert::TensorBufferScopedLock::Create(input_0_buffer);
+    ASSERT_TRUE(lock_and_addr.HasValue());
+    std::memcpy(lock_and_addr->second, kTestInput0Tensor,
+                sizeof(kTestInput0Tensor));
+  }
+  auto& input_1_buffer = input_buffers[1];
+  {
+    auto lock_and_addr = litert::TensorBufferScopedLock::Create(input_1_buffer);
+    ASSERT_TRUE(lock_and_addr.HasValue());
+    std::memcpy(lock_and_addr->second, kTestInput1Tensor,
+                sizeof(kTestInput1Tensor));
+  }
+
+  // Execute model.
+  compiled_model.Invoke(signatures[0], input_buffers, output_buffers);
+
+  // Check model output.
+  auto output_names = compiled_model.GetOutputNames(signatures[0]);
+  EXPECT_EQ(output_names.size(), 1);
+  EXPECT_STREQ(output_names[0], "tfl.custom");
+  auto& output_buffer = output_buffers[0];
+  {
+    auto lock_and_addr = litert::TensorBufferScopedLock::Create(output_buffer);
+    ASSERT_TRUE(lock_and_addr.HasValue());
     const float* output = reinterpret_cast<const float*>(lock_and_addr->second);
     for (auto i = 0; i < kTestOutputSize; ++i) {
       ABSL_LOG(INFO) << "Result: " << output[i] << "\t" << kTestOutputTensor[i];

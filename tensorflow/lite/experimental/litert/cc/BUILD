@@ -262,3 +262,53 @@ cc_test(
         "@com_google_googletest//:gtest_main",
     ],
 )
+
+cc_library(
+    name = "litert_compiled_model",
+    srcs = ["litert_compiled_model.cc"],
+    hdrs = ["litert_compiled_model.h"],
+    deps = [
+        ":litert_buffer_ref",
+        ":litert_expected",
+        ":litert_model",
+        ":litert_tensor_buffer",
+        ":litert_tensor_buffer_requirements",
+        "//tensorflow/compiler/mlir/lite:allocation",
+        "//tensorflow/lite:framework",
+        "//tensorflow/lite:model_builder",
+        "//tensorflow/lite/c:c_api_opaque",
+        "//tensorflow/lite/c:common",
+        "//tensorflow/lite/core:cc_api_stable",
+        "//tensorflow/lite/experimental/litert/c:litert_common",
+        "//tensorflow/lite/experimental/litert/c:litert_tensor_buffer",
+        "//tensorflow/lite/experimental/litert/core/model:model_buffer",
+        "//tensorflow/lite/experimental/litert/runtime:external_litert_buffer_context",
+        "//tensorflow/lite/experimental/litert/runtime:tfl_utils",
+        "//tensorflow/lite/experimental/litert/runtime/dispatch:dispatch_delegate",
+        "//tensorflow/lite/kernels:builtin_ops",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/strings:string_view",
+    ],
+)
+
+cc_test(
+    name = "litert_compiled_model_test",
+    srcs = ["litert_compiled_model_test.cc"],
+    data = [
+        "//tensorflow/lite/experimental/litert/test:testdata/simple_model.tflite",
+    ],
+    deps = [
+        ":litert_compiled_model",
+        ":litert_tensor_buffer",
+        "//tensorflow/lite:framework",
+        "//tensorflow/lite/c:c_api_opaque",
+        "//tensorflow/lite/c:common",
+        "//tensorflow/lite/experimental/litert/c:litert_tensor_buffer",
+        "//tensorflow/lite/experimental/litert/test:common",
+        "//tensorflow/lite/kernels:builtin_ops",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:absl_log",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
