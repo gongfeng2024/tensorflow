@@ -35,7 +35,6 @@ limitations under the License.
 #include <thread>
 #include <vector>
 
-#include "xla/tsl/protobuf/error_codes.pb.h"
 #include "tsl/platform/default/posix_file_system.h"
 #include "tsl/platform/env.h"
 #include "tsl/platform/load_library.h"
@@ -43,6 +42,7 @@ limitations under the License.
 #include "tsl/platform/mutex.h"
 #include "tsl/platform/ram_file_system.h"
 #include "tsl/platform/strcat.h"
+#include "xla/tsl/protobuf/error_codes.pb.h"
 
 namespace tsl {
 
@@ -148,7 +148,8 @@ class PosixEnv : public Env {
       auto thread_name =
           GetThreadNameRegistry().find(std::this_thread::get_id());
       if (thread_name != GetThreadNameRegistry().end()) {
-        *name = strings::StrCat(thread_name->second, "/", GetCurrentThreadId());
+        *name = strings::StrCat(thread_name->second, "/",
+                                static_cast<uint32>(GetCurrentThreadId()));
         return true;
       }
     }
