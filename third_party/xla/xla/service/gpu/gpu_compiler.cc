@@ -594,12 +594,7 @@ absl::Status RunSPMDPasses(
 #endif
 
   const int64_t num_partitions = hlo_module->config().num_partitions();
-  if (num_partitions > 1) {
-    if (!hlo_module->config().use_spmd_partitioning()) {
-      return InvalidArgument(
-          "num_partitions=%d but SPMD partitioning not enabled.",
-          num_partitions);
-    }
+  if (num_partitions > 1 && hlo_module->config().use_spmd_partitioning()) {
     HloPassPipeline spmd_pipeline("spmd-partitioner");
     AddSPMDPasses(
         hlo_module, layout_insensitive_algsimp_opts,
