@@ -29,6 +29,7 @@ limitations under the License.
 #include "absl/strings/str_join.h"
 #include "xla/service/computation_layout.h"
 #include "xla/service/hlo.pb.h"
+#include "xla/service/sharding_config.h"
 #include "xla/shape_layout.h"
 #include "xla/xla.pb.h"
 #include "tsl/platform/statusor.h"
@@ -328,6 +329,7 @@ HloModuleConfigProto HloModuleConfig::ToProto() const {
   proto.set_fdo_profile(fdo_profile_);
   proto.set_device_memory_size(device_memory_size_);
   proto.set_use_shardy_partitioner(use_shardy_partitioner_);
+  *proto.mutable_sharding_config() = ShardingConfig::ToProto(sharding_config_);
   return proto;
 }
 
@@ -401,6 +403,7 @@ HloModuleConfig::CreateFromProto(const HloModuleConfigProto& proto) {
   config->fdo_profile_ = proto.fdo_profile();
   config->device_memory_size_ = proto.device_memory_size();
   config->use_shardy_partitioner_ = proto.use_shardy_partitioner();
+  config->sharding_config_ = ShardingConfig::FromProto(proto.sharding_config());
   return std::move(config);
 }
 

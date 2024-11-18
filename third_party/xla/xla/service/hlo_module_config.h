@@ -30,6 +30,7 @@ limitations under the License.
 #include "xla/service/computation_layout.h"
 #include "xla/service/computation_placer.h"
 #include "xla/service/hlo.pb.h"
+#include "xla/service/sharding_config.h"
 #include "xla/xla.pb.h"
 #include "xla/xla_data.pb.h"
 #include "tsl/platform/protobuf.h"
@@ -351,6 +352,9 @@ class HloModuleConfig {
     return &phase_ordering_config_;
   }
 
+  const ShardingConfig& sharding_config() const { return sharding_config_; }
+  ShardingConfig* mutable_sharding_config() { return &sharding_config_; }
+
   int phase_index() const { return phase_index_; }
   void set_phase_index(const int phase_index) { phase_index_ = phase_index; }
 
@@ -559,6 +563,11 @@ class HloModuleConfig {
   int64_t device_memory_size_ = 0;
 
   bool use_shardy_partitioner_ = false;
+
+  // Sharding configuration, where sharding_config_.nodes[v] controls the
+  // sharding of operation v.
+  ShardingConfig sharding_config_;
+
   // LINT.ThenChange(//tensorflow/compiler/xla/xla.proto)
 };
 
