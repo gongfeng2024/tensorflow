@@ -23,6 +23,7 @@ limitations under the License.
 #include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/hlo/ir/hlo_module.h"
 #include "xla/hlo/parser/hlo_parser.h"
+#include "xla/hlo/testlib/filecheck.h"
 #include "xla/hlo/utils/hlo_matchers.h"
 #include "xla/hlo/utils/hlo_query.h"
 #include "xla/service/collective_ops_utils.h"
@@ -128,23 +129,6 @@ TEST_F(CollectivePermuteDecomposerTest, TransformedExplicitChannelId) {
   EXPECT_THAT(root, op::GetTupleElement(recv_done, 0));
 }
 
-TEST_F(CollectivePermuteDecomposerTest, NotTransformedDefaultChannelId) {
-  const char* const kModuleStr = R"(
-  HloModule test
-  ENTRY test_computation {
-    p = u32[] replica-id()
-    ROOT cp = u32[] collective-permute(p),
-      source_target_pairs={{0,1}, {1,2}, {2,3}, {3,4}}
-  }
-  )";
-
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
-                          ParseAndReturnUnverifiedModule((kModuleStr)));
-  CollectivePermuteDecomposer decomposer(/*threshold_in_bytes=*/0);
-  TF_ASSERT_OK_AND_ASSIGN(bool changed, decomposer.Run(module.get()));
-  EXPECT_FALSE(changed);
-}
-
 TEST_F(CollectivePermuteDecomposerTest, ThresholdNotTransformed) {
   const char* const kModuleStr = R"(
   HloModule test
@@ -178,7 +162,7 @@ TEST_F(CollectivePermuteDecomposerTest, Pipeline1) {
     count = get-tuple-element(param), index=0
     send-data = get-tuple-element(param), index=1
 
-    recv-data = u32[2] collective-permute(send-data), channel_id=1,
+    recv-data = u32[2] collective-permute(send-data), [[CHANNEL_ID]]
       source_target_pairs={{0,1}, {1,2}, {2,3}, {3,4}},
       frontend_attributes={_xla_other_attribute="xyz"}
 
@@ -202,37 +186,47 @@ TEST_F(CollectivePermuteDecomposerTest, Pipeline1) {
     ROOT result = u32[2] get-tuple-element(while_result), index=1
   })";
 
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
-                          ParseAndReturnUnverifiedModule((kModuleStr)));
-  CollectivePermuteDecomposer decomposer(/*threshold_in_bytes=*/0);
-  TF_ASSERT_OK_AND_ASSIGN(bool changed, decomposer.Run(module.get()));
-  EXPECT_TRUE(changed);
-  HloInstruction* recv = FindInstruction(module.get(), "recv");
-  EXPECT_EQ(recv->channel_id().value(), 1);
-  EXPECT_THAT(
-      recv->ToString(),
-      HasSubstr(
-          "_xla_send_recv_source_target_pairs={{0,1},{1,2},{2,3},{3,4}}"));
-  EXPECT_THAT(recv->ToString(), HasSubstr("_xla_send_recv_pipeline=\"0\""));
-  EXPECT_THAT(recv->ToString(), HasSubstr("_xla_other_attribute=\"xyz\""));
-  HloInstruction* recv_done = FindInstruction(module.get(), "recv-done");
-  EXPECT_THAT(recv_done->ToString(),
-              HasSubstr("_xla_send_recv_pipeline=\"0\""));
+  std::string channel_id_hlo =
+      absl::StrReplaceAll(kModuleStr, {{"[[CHANNEL_ID]]", "channel_id=1, "}});
+  std::string no_channel_id_hlo =
+      absl::StrReplaceAll(kModuleStr, {{"[[CHANNEL_ID]]", ""}});
 
-  HloInstruction* send = FindInstruction(module.get(), "send");
-  EXPECT_EQ(send->channel_id().value(), 1);
-  EXPECT_THAT(
-      send->ToString(),
-      HasSubstr(
-          "_xla_send_recv_source_target_pairs={{0,1},{1,2},{2,3},{3,4}}"));
-  EXPECT_THAT(send->ToString(), HasSubstr("_xla_send_recv_pipeline=\"0\""));
-  EXPECT_THAT(send->ToString(), HasSubstr("_xla_other_attribute=\"xyz\""));
-  HloInstruction* send_done = FindInstruction(module.get(), "send-done");
-  EXPECT_THAT(send_done->ToString(),
-              HasSubstr("_xla_send_recv_pipeline=\"0\""));
+  auto check_module = [](std::string module_str,
+                         absl::flat_hash_set<int64_t> channel_ids) {
+    TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                            ParseAndReturnUnverifiedModule((module_str)));
+    CollectivePermuteDecomposer decomposer(/*threshold_in_bytes=*/0);
+    TF_ASSERT_OK_AND_ASSIGN(bool changed, decomposer.Run(module.get()));
+    EXPECT_TRUE(changed);
+    HloInstruction* recv = FindInstruction(module.get(), "recv");
+    EXPECT_TRUE(channel_ids.contains(recv->channel_id().value()));
+    EXPECT_THAT(
+        recv->ToString(),
+        HasSubstr(
+            "_xla_send_recv_source_target_pairs={{0,1},{1,2},{2,3},{3,4}}"));
+    EXPECT_THAT(recv->ToString(), HasSubstr("_xla_send_recv_pipeline=\"0\""));
+    EXPECT_THAT(recv->ToString(), HasSubstr("_xla_other_attribute=\"xyz\""));
+    HloInstruction* recv_done = FindInstruction(module.get(), "recv-done");
+    EXPECT_THAT(recv_done->ToString(),
+                HasSubstr("_xla_send_recv_pipeline=\"0\""));
 
-  EXPECT_FALSE(recv_done->control_predecessors().empty());
-  EXPECT_EQ(recv_done->control_predecessors()[0], send);
+    HloInstruction* send = FindInstruction(module.get(), "send");
+    EXPECT_TRUE(channel_ids.contains(send->channel_id().value()));
+    EXPECT_THAT(
+        send->ToString(),
+        HasSubstr(
+            "_xla_send_recv_source_target_pairs={{0,1},{1,2},{2,3},{3,4}}"));
+    EXPECT_THAT(send->ToString(), HasSubstr("_xla_send_recv_pipeline=\"0\""));
+    EXPECT_THAT(send->ToString(), HasSubstr("_xla_other_attribute=\"xyz\""));
+    HloInstruction* send_done = FindInstruction(module.get(), "send-done");
+    EXPECT_THAT(send_done->ToString(),
+                HasSubstr("_xla_send_recv_pipeline=\"0\""));
+
+    EXPECT_FALSE(recv_done->control_predecessors().empty());
+    EXPECT_EQ(recv_done->control_predecessors()[0], send);
+  };
+  check_module(channel_id_hlo, {1});
+  check_module(no_channel_id_hlo, {0});
 }
 
 TEST_F(CollectivePermuteDecomposerTest, ForwardPipeline2) {
@@ -250,10 +244,10 @@ TEST_F(CollectivePermuteDecomposerTest, ForwardPipeline2) {
     count = get-tuple-element(param), index=0
     send-data = get-tuple-element(param), index=1
 
-    recv-data.0 = u32[2] collective-permute(send-data), channel_id=1,
+    recv-data.0 = u32[2] collective-permute(send-data), [[CHANNEL_ID_1]]
       source_target_pairs={{3,0}}
 
-    recv-data.1 = u32[2] collective-permute(send-data), channel_id=2,
+    recv-data.1 = u32[2] collective-permute(send-data), [[CHANNEL_ID_2]]
       source_target_pairs={{0,1}, {1,2}, {2,3}}
 
     replica = u32[] replica-id()
@@ -282,38 +276,50 @@ TEST_F(CollectivePermuteDecomposerTest, ForwardPipeline2) {
     ROOT result = u32[2] get-tuple-element(while_result), index=1
   })";
 
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
-                          ParseAndReturnUnverifiedModule((kModuleStr)));
-  CollectivePermuteDecomposer decomposer(/*threshold_in_bytes=*/0);
-  TF_ASSERT_OK_AND_ASSIGN(bool changed, decomposer.Run(module.get()));
-  EXPECT_TRUE(changed);
-  HloInstruction* recv = FindInstruction(module.get(), "recv");
-  EXPECT_EQ(recv->channel_id().value(), 1);
-  EXPECT_THAT(recv->ToString(),
-              HasSubstr("_xla_send_recv_source_target_pairs={{3,0}}"));
-  EXPECT_THAT(recv->ToString(), HasSubstr("_xla_send_recv_pipeline=\"0\""));
-  HloInstruction* send = FindInstruction(module.get(), "send");
-  EXPECT_THAT(send->ToString(),
-              HasSubstr("_xla_send_recv_source_target_pairs={{3,0}}"));
-  EXPECT_THAT(send->ToString(), HasSubstr("_xla_send_recv_pipeline=\"0\""));
+  std::string channel_id_hlo =
+      absl::StrReplaceAll(kModuleStr, {{"[[CHANNEL_ID_1]]", "channel_id=1, "},
+                                       {"[[CHANNEL_ID_2]]", "channel_id=2, "}});
+  std::string no_channel_id_hlo = absl::StrReplaceAll(
+      kModuleStr, {{"[[CHANNEL_ID_1]]", ""}, {"[[CHANNEL_ID_2]]", ""}});
 
-  HloInstruction* recv1 = FindInstruction(module.get(), "recv.1");
-  EXPECT_EQ(recv1->channel_id().value(), 2);
-  EXPECT_THAT(
-      recv1->ToString(),
-      HasSubstr("_xla_send_recv_source_target_pairs={{0,1},{1,2},{2,3}}"));
-  EXPECT_THAT(recv1->ToString(), HasSubstr("_xla_send_recv_pipeline=\"1\""));
-  HloInstruction* recv_done1 = FindInstruction(module.get(), "recv-done.1");
-  EXPECT_THAT(recv_done1->ToString(),
-              HasSubstr("_xla_send_recv_pipeline=\"1\""));
-  HloInstruction* send1 = FindInstruction(module.get(), "send.1");
-  EXPECT_THAT(
-      send1->ToString(),
-      HasSubstr("_xla_send_recv_source_target_pairs={{0,1},{1,2},{2,3}}"));
-  EXPECT_THAT(send1->ToString(), HasSubstr("_xla_send_recv_pipeline=\"1\""));
-  HloInstruction* send_done1 = FindInstruction(module.get(), "send-done.1");
-  EXPECT_THAT(send_done1->ToString(),
-              HasSubstr("_xla_send_recv_pipeline=\"1\""));
+  auto check_module = [](const std::string module_str,
+                         absl::flat_hash_set<int64_t> channel_ids) {
+    TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                            ParseAndReturnUnverifiedModule((module_str)));
+    CollectivePermuteDecomposer decomposer(/*threshold_in_bytes=*/0);
+    TF_ASSERT_OK_AND_ASSIGN(bool changed, decomposer.Run(module.get()));
+    EXPECT_TRUE(changed);
+    HloInstruction* recv = FindInstruction(module.get(), "recv");
+    EXPECT_TRUE(channel_ids.contains(recv->channel_id().value()));
+    EXPECT_THAT(recv->ToString(),
+                HasSubstr("_xla_send_recv_source_target_pairs={{3,0}}"));
+    EXPECT_THAT(recv->ToString(), HasSubstr("_xla_send_recv_pipeline=\"0\""));
+    HloInstruction* send = FindInstruction(module.get(), "send");
+    EXPECT_THAT(send->ToString(),
+                HasSubstr("_xla_send_recv_source_target_pairs={{3,0}}"));
+    EXPECT_THAT(send->ToString(), HasSubstr("_xla_send_recv_pipeline=\"0\""));
+
+    HloInstruction* recv1 = FindInstruction(module.get(), "recv.1");
+    EXPECT_TRUE(channel_ids.contains(recv1->channel_id().value()));
+    EXPECT_THAT(
+        recv1->ToString(),
+        HasSubstr("_xla_send_recv_source_target_pairs={{0,1},{1,2},{2,3}}"));
+    EXPECT_THAT(recv1->ToString(), HasSubstr("_xla_send_recv_pipeline=\"1\""));
+    HloInstruction* recv_done1 = FindInstruction(module.get(), "recv-done.1");
+    EXPECT_THAT(recv_done1->ToString(),
+                HasSubstr("_xla_send_recv_pipeline=\"1\""));
+    HloInstruction* send1 = FindInstruction(module.get(), "send.1");
+    EXPECT_THAT(
+        send1->ToString(),
+        HasSubstr("_xla_send_recv_source_target_pairs={{0,1},{1,2},{2,3}}"));
+    EXPECT_THAT(send1->ToString(), HasSubstr("_xla_send_recv_pipeline=\"1\""));
+    HloInstruction* send_done1 = FindInstruction(module.get(), "send-done.1");
+    EXPECT_THAT(send_done1->ToString(),
+                HasSubstr("_xla_send_recv_pipeline=\"1\""));
+  };
+
+  check_module(channel_id_hlo, {1, 2});
+  check_module(no_channel_id_hlo, {0});
 }
 
 TEST_F(CollectivePermuteDecomposerTest, ForwardPipelineWithMatmul) {
@@ -336,10 +342,10 @@ TEST_F(CollectivePermuteDecomposerTest, ForwardPipelineWithMatmul) {
     weights = f32[2,2] get-tuple-element(inputs), index=2
     data = f32[2,2] get-tuple-element(inputs), index=1
 
-    cp_back = f32[2,2] collective-permute(data), channel_id=1,
+    cp_back = f32[2,2] collective-permute(data), [[CHANNEL_ID_1]]
       source_target_pairs={{3,0}},
       frontend_attributes={_xla_send_recv_validation="{{3,10}}"}
-    cp_forward = f32[2,2] collective-permute(data), channel_id=2,
+    cp_forward = f32[2,2] collective-permute(data), [[CHANNEL_ID_2]]
       source_target_pairs={{0,1},{1,2},{2,3}},
       frontend_attributes={_xla_send_recv_validation="{{0,7},{1,8},{2,9}}"}
 
@@ -369,60 +375,72 @@ TEST_F(CollectivePermuteDecomposerTest, ForwardPipelineWithMatmul) {
     ROOT data_out = f32[2,2] get-tuple-element(while_result), index=1
   }
   )";
-  TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
-                          ParseAndReturnUnverifiedModule((kModuleStr)));
-  CollectivePermuteDecomposer decomposer(/*threshold_in_bytes=*/0);
-  TF_ASSERT_OK_AND_ASSIGN(bool changed, decomposer.Run(module.get()));
-  EXPECT_TRUE(changed);
-  HloModule* transformed_module = module.get();
-  // Check the annotations and ordering of the decomposed send-recv pairs.
-  // We expect the recv to come before the send in the while body, both for the
-  // forward edge ({0,1},{1,2},{2,3}}) and the backward edge ({3,0}). This is
-  // an XLA invariant that shouldn't be broken (see
-  // https://openxla.org/xla/operation_semantics#send for details of the
-  // semantics).
-  HloComputation* while_body =
-      FindComputation(transformed_module, "while_body");
-  HloInstruction* recv_bwd = hlo_query::FindInstruction(while_body, "recv");
-  EXPECT_EQ(recv_bwd->channel_id().value(), 1);
-  auto recv_bwd_frontend_attributes = recv_bwd->frontend_attributes().map();
-  EXPECT_EQ(recv_bwd_frontend_attributes.size(), 3);
-  EXPECT_EQ(recv_bwd_frontend_attributes.at(kSendRecvValidationAttr),
-            "{{3,10}}");
-  EXPECT_EQ(recv_bwd_frontend_attributes.at(kSendRecvPipelineAttr), "0");
-  EXPECT_EQ(recv_bwd_frontend_attributes.at(kSendRecvSourceTargetPairsAttr),
-            "{{3,0}}");
+  std::string channel_id_hlo =
+      absl::StrReplaceAll(kModuleStr, {{"[[CHANNEL_ID_1]]", "channel_id=1, "},
+                                       {"[[CHANNEL_ID_2]]", "channel_id=2, "}});
+  std::string no_channel_id_hlo = absl::StrReplaceAll(
+      kModuleStr, {{"[[CHANNEL_ID_1]]", ""}, {"[[CHANNEL_ID_2]]", ""}});
 
-  HloInstruction* send_bwd = hlo_query::FindInstruction(while_body, "send");
-  auto send_bwd_frontend_attributes = send_bwd->frontend_attributes().map();
-  EXPECT_THAT(send_bwd_frontend_attributes.at(kSendRecvSourceTargetPairsAttr),
+  auto check_module = [](std::string module_str,
+                         absl::flat_hash_set<int64_t> channel_ids) {
+    TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                            ParseAndReturnUnverifiedModule((module_str)));
+    CollectivePermuteDecomposer decomposer(/*threshold_in_bytes=*/0);
+    TF_ASSERT_OK_AND_ASSIGN(bool changed, decomposer.Run(module.get()));
+    EXPECT_TRUE(changed);
+    HloModule* transformed_module = module.get();
+    // Check the annotations and ordering of the decomposed send-recv pairs.
+    // We expect the recv to come before the send in the while body, both for
+    // the forward edge ({0,1},{1,2},{2,3}}) and the backward edge ({3,0}). This
+    // is an XLA invariant that shouldn't be broken (see
+    // https://openxla.org/xla/operation_semantics#send for details of the
+    // semantics).
+    HloComputation* while_body =
+        FindComputation(transformed_module, "while_body");
+    HloInstruction* recv_bwd = hlo_query::FindInstruction(while_body, "recv");
+    EXPECT_TRUE(channel_ids.contains(recv_bwd->channel_id().value()));
+    auto recv_bwd_frontend_attributes = recv_bwd->frontend_attributes().map();
+    EXPECT_EQ(recv_bwd_frontend_attributes.size(), 3);
+    EXPECT_EQ(recv_bwd_frontend_attributes.at(kSendRecvValidationAttr),
+              "{{3,10}}");
+    EXPECT_EQ(recv_bwd_frontend_attributes.at(kSendRecvPipelineAttr), "0");
+    EXPECT_EQ(recv_bwd_frontend_attributes.at(kSendRecvSourceTargetPairsAttr),
               "{{3,0}}");
 
-  HloInstruction* recv_fwd = hlo_query::FindInstruction(while_body, "recv.1");
-  EXPECT_EQ(recv_fwd->channel_id().value(), 2);
-  auto recv_fwd_frontend_attributes = recv_fwd->frontend_attributes().map();
-  EXPECT_EQ(recv_fwd_frontend_attributes.size(), 3);
-  EXPECT_EQ(recv_fwd_frontend_attributes.at(kSendRecvPipelineAttr), "1");
-  EXPECT_EQ(recv_fwd_frontend_attributes.at(kSendRecvSourceTargetPairsAttr),
-            "{{0,1},{1,2},{2,3}}");
+    HloInstruction* send_bwd = hlo_query::FindInstruction(while_body, "send");
+    auto send_bwd_frontend_attributes = send_bwd->frontend_attributes().map();
+    EXPECT_THAT(send_bwd_frontend_attributes.at(kSendRecvSourceTargetPairsAttr),
+                "{{3,0}}");
 
-  HloInstruction* send_fwd = hlo_query::FindInstruction(while_body, "send.1");
-  auto send_fwd_frontend_attributes = send_fwd->frontend_attributes().map();
-  EXPECT_EQ(send_fwd_frontend_attributes.size(), 3);
-  EXPECT_EQ(send_fwd_frontend_attributes.at(kSendRecvPipelineAttr), "1");
-  EXPECT_EQ(send_fwd_frontend_attributes.at(kSendRecvSourceTargetPairsAttr),
-            "{{0,1},{1,2},{2,3}}");
+    HloInstruction* recv_fwd = hlo_query::FindInstruction(while_body, "recv.1");
+    EXPECT_TRUE(channel_ids.contains(recv_fwd->channel_id().value()));
+    auto recv_fwd_frontend_attributes = recv_fwd->frontend_attributes().map();
+    EXPECT_EQ(recv_fwd_frontend_attributes.size(), 3);
+    EXPECT_EQ(recv_fwd_frontend_attributes.at(kSendRecvPipelineAttr), "1");
+    EXPECT_EQ(recv_fwd_frontend_attributes.at(kSendRecvSourceTargetPairsAttr),
+              "{{0,1},{1,2},{2,3}}");
 
-  EXPECT_NE(while_body, nullptr);
-  HloInstruction* recv_done_fwd =
-      hlo_query::FindInstruction(while_body, "recv-done");
-  HloInstruction* recv_done_bwd =
-      hlo_query::FindInstruction(while_body, "recv-done.1");
+    HloInstruction* send_fwd = hlo_query::FindInstruction(while_body, "send.1");
+    auto send_fwd_frontend_attributes = send_fwd->frontend_attributes().map();
+    EXPECT_EQ(send_fwd_frontend_attributes.size(), 3);
+    EXPECT_EQ(send_fwd_frontend_attributes.at(kSendRecvPipelineAttr), "1");
+    EXPECT_EQ(send_fwd_frontend_attributes.at(kSendRecvSourceTargetPairsAttr),
+              "{{0,1},{1,2},{2,3}}");
 
-  // TODO: b/356201477 - Investigate potential NCCL deadlock in
-  // collective_permute_decomposer
-  EXPECT_EQ(recv_done_fwd->control_predecessors()[0], send_bwd);
-  EXPECT_EQ(recv_done_bwd->control_predecessors()[0], send_fwd);
+    EXPECT_NE(while_body, nullptr);
+    HloInstruction* recv_done_fwd =
+        hlo_query::FindInstruction(while_body, "recv-done");
+    HloInstruction* recv_done_bwd =
+        hlo_query::FindInstruction(while_body, "recv-done.1");
+
+    // TODO: b/356201477 - Investigate potential NCCL deadlock in
+    // collective_permute_decomposer
+    EXPECT_EQ(recv_done_fwd->control_predecessors()[0], send_bwd);
+    EXPECT_EQ(recv_done_bwd->control_predecessors()[0], send_fwd);
+  };
+
+  check_module(channel_id_hlo, {1, 2});
+  check_module(no_channel_id_hlo, {0});
 }
 
 TEST_F(CollectivePermuteDecomposerTest, BackwardPipeline2) {
@@ -440,10 +458,10 @@ TEST_F(CollectivePermuteDecomposerTest, BackwardPipeline2) {
     count = get-tuple-element(param), index=0
     send-data = get-tuple-element(param), index=1
 
-    recv-data.0 = u32[2] collective-permute(send-data), channel_id=1,
+    recv-data.0 = u32[2] collective-permute(send-data), [[CHANNEL_ID_1]]
       source_target_pairs={{1,0},{2,1},{3,2}}
 
-    recv-data.1 = u32[2] collective-permute(send-data), channel_id=2,
+    recv-data.1 = u32[2] collective-permute(send-data), [[CHANNEL_ID_2]]
       source_target_pairs={{0,3}}
 
     replica = u32[] replica-id()
@@ -472,32 +490,79 @@ TEST_F(CollectivePermuteDecomposerTest, BackwardPipeline2) {
     ROOT result = u32[2] get-tuple-element(while_result), index=1
   })";
 
+  std::string channel_id_hlo =
+      absl::StrReplaceAll(kModuleStr, {{"[[CHANNEL_ID_1]]", "channel_id=1, "},
+                                       {"[[CHANNEL_ID_2]]", "channel_id=2, "}});
+  std::string no_channel_id_hlo = absl::StrReplaceAll(
+      kModuleStr, {{"[[CHANNEL_ID_1]]", ""}, {"[[CHANNEL_ID_2]]", ""}});
+
+  auto check_module = [](std::string module_str,
+                         absl::flat_hash_set<int64_t> channel_ids) {
+    TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
+                            ParseAndReturnUnverifiedModule((module_str)));
+    CollectivePermuteDecomposer decomposer(/*threshold_in_bytes=*/0);
+    TF_ASSERT_OK_AND_ASSIGN(bool changed, decomposer.Run(module.get()));
+    EXPECT_TRUE(changed);
+    HloInstruction* recv = FindInstruction(module.get(), "recv");
+    EXPECT_TRUE(channel_ids.contains(recv->channel_id().value()));
+    EXPECT_THAT(
+        recv->ToString(),
+        HasSubstr("_xla_send_recv_source_target_pairs={{1,0},{2,1},{3,2}}"));
+    EXPECT_THAT(recv->ToString(), HasSubstr("_xla_send_recv_pipeline=\"1\""));
+    HloInstruction* send = FindInstruction(module.get(), "send");
+    EXPECT_THAT(
+        send->ToString(),
+        HasSubstr("_xla_send_recv_source_target_pairs={{1,0},{2,1},{3,2}}"));
+    EXPECT_THAT(send->ToString(), HasSubstr("_xla_send_recv_pipeline=\"1\""));
+
+    HloInstruction* recv1 = FindInstruction(module.get(), "recv.1");
+    EXPECT_TRUE(channel_ids.contains(recv1->channel_id().value()));
+    EXPECT_THAT(recv1->ToString(),
+                HasSubstr("_xla_send_recv_source_target_pairs={{0,3}}"));
+    EXPECT_THAT(recv1->ToString(), HasSubstr("_xla_send_recv_pipeline=\"0\""));
+    HloInstruction* send1 = FindInstruction(module.get(), "send.1");
+    EXPECT_THAT(send1->ToString(),
+                HasSubstr("_xla_send_recv_source_target_pairs={{0,3}}"));
+    EXPECT_THAT(send1->ToString(), HasSubstr("_xla_send_recv_pipeline=\"0\""));
+  };
+
+  check_module(channel_id_hlo, {1, 2});
+  check_module(no_channel_id_hlo, {0});
+}
+
+TEST_F(CollectivePermuteDecomposerTest, DefaultChannelIdNoCycle) {
+  const char* const kModuleStr = R"(
+  HloModule test
+  ENTRY test_computation {
+    p = u32[] replica-id()
+    ROOT cp = u32[] collective-permute(p),
+      source_target_pairs={{0,1}, {1,2}, {2,3}, {3,4}}
+  }
+  )";
+
   TF_ASSERT_OK_AND_ASSIGN(std::unique_ptr<HloModule> module,
                           ParseAndReturnUnverifiedModule((kModuleStr)));
   CollectivePermuteDecomposer decomposer(/*threshold_in_bytes=*/0);
   TF_ASSERT_OK_AND_ASSIGN(bool changed, decomposer.Run(module.get()));
   EXPECT_TRUE(changed);
-  HloInstruction* recv = FindInstruction(module.get(), "recv");
-  EXPECT_EQ(recv->channel_id().value(), 1);
-  EXPECT_THAT(
-      recv->ToString(),
-      HasSubstr("_xla_send_recv_source_target_pairs={{1,0},{2,1},{3,2}}"));
-  EXPECT_THAT(recv->ToString(), HasSubstr("_xla_send_recv_pipeline=\"1\""));
-  HloInstruction* send = FindInstruction(module.get(), "send");
-  EXPECT_THAT(
-      send->ToString(),
-      HasSubstr("_xla_send_recv_source_target_pairs={{1,0},{2,1},{3,2}}"));
-  EXPECT_THAT(send->ToString(), HasSubstr("_xla_send_recv_pipeline=\"1\""));
-
-  HloInstruction* recv1 = FindInstruction(module.get(), "recv.1");
-  EXPECT_EQ(recv1->channel_id().value(), 2);
-  EXPECT_THAT(recv1->ToString(),
-              HasSubstr("_xla_send_recv_source_target_pairs={{0,3}}"));
-  EXPECT_THAT(recv1->ToString(), HasSubstr("_xla_send_recv_pipeline=\"0\""));
-  HloInstruction* send1 = FindInstruction(module.get(), "send.1");
-  EXPECT_THAT(send1->ToString(),
-              HasSubstr("_xla_send_recv_source_target_pairs={{0,3}}"));
-  EXPECT_THAT(send1->ToString(), HasSubstr("_xla_send_recv_pipeline=\"0\""));
+  TF_ASSERT_OK_AND_ASSIGN(bool filecheck_status,
+                          RunFileCheck(/*input=*/module->ToString(
+                                           /*options=*/HloPrintOptions{}
+                                               .set_print_operand_shape(false)
+                                               .set_print_result_shape(false)),
+                                       /*pattern=*/R"(
+  // CHECK: ENTRY %test_computation
+  // CHECK:   %[[REPLICA_ID:.+]] = replica-id()
+  // CHECK:   %[[TOKEN:.+]] = after-all()
+  // CHECK:   %[[SEND:.+]] = send(%[[REPLICA_ID]], %[[TOKEN]]), channel_id=0, 
+  // CHECK-SAME{LITERAL}: frontend_attributes={_xla_send_recv_source_target_pairs={{0,1},{1,2},{2,3},{3,4}}}
+  // CHECK:   %[[SEND_DONE:.+]] = send-done(%[[SEND]]), channel_id=0
+  // CHECK:   %[[RECV:.+]] = recv(%[[TOKEN]]), channel_id=0,
+  // CHECK-SAME{LITERAL}: frontend_attributes={_xla_send_recv_source_target_pairs={{0,1},{1,2},{2,3},{3,4}}}
+  // CHECK:   %[[RECV_DONE:.+]] = recv-done(%[[RECV]]), channel_id=0, control-predecessors={%[[SEND]]}
+  // CHECK:   ROOT {{.+}} = get-tuple-element(%[[RECV_DONE]]), index=0
+  )"));
+  EXPECT_TRUE(filecheck_status);
 }
 
 }  // namespace
