@@ -1389,6 +1389,7 @@ cc_library(
         "//tensorflow/core:framework",
         "//tensorflow/core:portable_gif_internal",
         "//tensorflow/core:protos_all_cc",
+        "//tensorflow/lite/schema:schema_fbs",
         "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/container:flat_hash_map",
