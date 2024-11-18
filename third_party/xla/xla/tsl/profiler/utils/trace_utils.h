@@ -55,7 +55,13 @@ constexpr int kThreadIdHostOffloadOpEnd = kThreadIdDerivedMin + 48;
 // Space for derived lines for host XLA Ops
 constexpr int kThreadIdHostXlaRegionStart = kThreadIdDerivedMin + 49;
 constexpr int kThreadIdHostXlaRegionEnd = kThreadIdHostXlaRegionStart + 240;
-constexpr int kThreadIdDerivedMax = kThreadIdHostXlaRegionEnd;
+constexpr int kThreadIdMultiStreamDeviceDerivedStart =
+    kThreadIdHostXlaRegionEnd + 1;
+// Reserve line ids for 100 non-derived device stream to be derived, each with 6
+// derived lines, as from kThreadIdTfNameScope to kThreadIdSource.
+constexpr int kThreadIdMultiStreamDeviceDerivedEnd =
+    kThreadIdMultiStreamDeviceDerivedStart + 600;
+constexpr int kThreadIdDerivedMax = kThreadIdMultiStreamDeviceDerivedEnd;
 
 static inline bool IsDerivedThreadId(int thread_id) {
   return thread_id >= kThreadIdDerivedMin && thread_id <= kThreadIdDerivedMax;
