@@ -610,7 +610,7 @@ TEST_P(IfrtBackendHandlerTest, DisassembleIntoSingleDeviceArraysSucceeds) {
   // arrays we injected.
   EXPECT_THAT(
       disassemble_response->disassemble_into_single_device_arrays_response()
-          .single_device_array_handles(),
+          .array_handles(),
       SizeIs(2));
 }
 
