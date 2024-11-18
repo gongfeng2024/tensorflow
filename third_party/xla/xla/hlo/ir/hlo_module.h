@@ -43,6 +43,7 @@ limitations under the License.
 #include "xla/hlo/ir/hlo_module_metadata.h"
 #include "xla/hlo/ir/hlo_schedule.h"
 #include "xla/hlo/ir/hlo_sharding.h"
+#include "xla/hlo/utils/copy_on_write.h"
 #include "xla/iterator_util.h"
 #include "xla/printer.h"
 #include "xla/service/compilation_environments.h"
