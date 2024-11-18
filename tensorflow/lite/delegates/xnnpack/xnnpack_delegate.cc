@@ -38,6 +38,8 @@ limitations under the License.
 #include "Eigen/Core"  // from @eigen_archive
 #include "flatbuffers/flexbuffers.h"  // from @flatbuffers
 #include "pthreadpool.h"  // from @pthreadpool
+#include "tensorflow/compiler/mlir/lite/kernels/internal/compatibility_macros.h"
+#include "tensorflow/compiler/mlir/lite/tools/optimize/reduced_precision_metadata.h"
 #include "tensorflow/lite/builtin_ops.h"
 #include "tensorflow/lite/c/c_api_types.h"
 #include "tensorflow/lite/core/api/profiler.h"
@@ -832,6 +834,7 @@ class Subgraph {
           reinterpret_cast<tflite::Subgraph*>(context->impl_)
               ->GetTensorBufferIdentifiers());
     }
+
     // Convert subgraph inputs and outputs to hash sets for faster lookup.
     const std::unordered_set<int> inputs(
         &params->input_tensors->data[0],
@@ -852,6 +855,9 @@ class Subgraph {
     if (context->GetExecutionPlan(context, &execution_plan) != kTfLiteOk) {
       return nullptr;
     }
+
+    // Create a map of dequantized f32 tensors to their f16 input tensors.
+    std::unordered_map<int, int> f16_input_tensor_for_dequant_f32_tensor;
 
     bool has_sparse_weights = false;
     // Detect which tensors are used as inputs or outputs of any subgraph nodes.
@@ -878,6 +884,22 @@ class Subgraph {
         }
       }
 
+      // Check if this is an `f16` to `f32` dequantization, and if so, record
+      // the mapping from the output tensor to the input tensor.
+      if (registration->builtin_code == kTfLiteBuiltinDequantize &&
+          node->inputs->size == 1 && node->outputs->size == 1 &&
+          context->tensors[node->inputs->data[0]].type == kTfLiteFloat16 &&
+          context->tensors[node->outputs->data[0]].type == kTfLiteFloat32) {
+        const int input_id = node->inputs->data[0];
+        const int output_id = node->outputs->data[0];
+        TFLITE_LOG(
+            tflite::TFLITE_LOG_VERBOSE,
+            "Found kTfLiteBuiltinDequantize with input=%i and output=%i.",
+            input_id, output_id);
+        f16_input_tensor_for_dequant_f32_tensor[output_id] = input_id;
+        tensors[node->inputs->data[0]] = input_id;
+      }
+
       if (delegate.static_unpack_nodes_.count(node_index) != 0) {
         // The node unpacks static input and can be skipped because its input
         // was pre-unpacked in DelegatePrepare.
@@ -899,8 +921,8 @@ class Subgraph {
           {
             const int t = node->inputs->data[0];
             tensors[t] = t;
+            break;
           }
-          break;
         case kTfLiteBuiltinSplit:
           // Ignore the first input (split_dim), as it is represented as
           // parameters of the XNNPACK operator rather than extra input.
@@ -917,14 +939,18 @@ class Subgraph {
             tensors[t] = t;
             break;
           }
+        case kTfLiteBuiltinTransposeConv:
+          // Ignore the output size parameter (see above).
+          for (int k = 1; k < node->inputs->size; k++) {
+            const int t = node->inputs->data[k];
+            if (t >= 0) {
+              tensors[t] = t;
+            }
+          }
+          break;
         default:
           // All other operators: process all inputs
           for (int k = 0; k < node->inputs->size; k++) {
-            if (registration->builtin_code == kTfLiteBuiltinTransposeConv &&
-                k == 0) {
-              // Ignore the output size parameter (see above).
-              continue;
-            }
             const int t = node->inputs->data[k];
             if (t >= 0) {
               tensors[t] = t;
@@ -1011,6 +1037,20 @@ class Subgraph {
         // Proceed with processing the next tensor.
         continue;
       }
+
+      // Rewire the `f16`->`f32` tensors.
+      const auto it = f16_input_tensor_for_dequant_f32_tensor.find(t);
+      if (it != f16_input_tensor_for_dequant_f32_tensor.end()) {
+        const uint32_t f16_tflite_id = it->second;
+        const uint32_t f16_xnnpack_id = tflite_tensor_to_xnnpack[f16_tflite_id];
+        tflite_tensor_to_xnnpack[t] = f16_xnnpack_id;
+        TFLITE_LOG(
+            tflite::TFLITE_LOG_VERBOSE,
+            "Rewiring f32_tflite_id=%i, f16_tflite_id=%i (xnnpack_id=%i).", t,
+            f16_tflite_id, f16_xnnpack_id);
+        continue;
+      }
+
       const xnn_datatype datatype =
           GetXNNPackDatatype(context, context->tensors[t], t);
       if (datatype == xnn_datatype_invalid) {
