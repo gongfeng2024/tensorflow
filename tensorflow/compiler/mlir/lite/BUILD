@@ -73,6 +73,7 @@ td_library(
 td_library(
     name = "tensorflow_lite_patterns_td_files",
     srcs = [
+        "transforms/converter_quantize_patterns.td",
         "transforms/legalize_patterns.td",
         "transforms/legalize_variables.td",
         "transforms/optimize_batch_matmul.td",
@@ -291,6 +292,20 @@ gentbl_cc_library(
     ],
     tblgen = "@llvm-project//mlir:mlir-tblgen",
     td_file = "transforms/quantize_patterns.td",
+    deps = [":tensorflow_lite_patterns_td_files"],
+)
+
+gentbl_cc_library(
+    name = "tensorflow_lite_converter_quantize_inc_gen",
+    compatible_with = get_compatible_with_portable(),
+    tbl_outs = [
+        (
+            ["-gen-rewriters"],
+            "transforms/generated_converter_quantize.inc",
+        ),
+    ],
+    tblgen = "@llvm-project//mlir:mlir-tblgen",
+    td_file = "transforms/converter_quantize_patterns.td",
     deps = [":tensorflow_lite_patterns_td_files"],
 )
 
@@ -1167,6 +1182,7 @@ cc_library(
         ":op_quant_spec_getters_inc",
         ":stateful_ops_utils",
         ":tensorflow_lite",
+        ":tensorflow_lite_converter_quantize_inc_gen",
         ":tensorflow_lite_passes_inc_gen",
         ":tensorflow_lite_post_quantize_inc_gen",
         ":tensorflow_lite_quantize_inc_gen",
