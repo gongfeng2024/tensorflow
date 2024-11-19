@@ -13,29 +13,29 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
+#include "tensorflow/compiler/mlir/lite/transforms/optimize_broadcast_like_pass.h"
+
 #include <array>
 #include <cstdint>
 #include <functional>
-#include <memory>
 #include <utility>
 
 #include "llvm/Support/Casting.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"  // from @llvm-project  // IWYU pragma: keep
 #include "mlir/Dialect/Traits.h"  // from @llvm-project
+#include "mlir/IR/BuiltinTypeInterfaces.h"  // from @llvm-project
 #include "mlir/IR/BuiltinTypes.h"  // from @llvm-project
 #include "mlir/IR/MLIRContext.h"  // from @llvm-project
 #include "mlir/IR/Operation.h"  // from @llvm-project
 #include "mlir/IR/PatternMatch.h"  // from @llvm-project
-#include "mlir/Pass/Pass.h"  // from @llvm-project
-#include "mlir/Pass/PassRegistry.h"  // from @llvm-project
+#include "mlir/IR/Value.h"  // from @llvm-project
 #include "mlir/Support/LLVM.h"  // from @llvm-project
 #include "mlir/Support/LogicalResult.h"  // from @llvm-project
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"  // from @llvm-project
 #include "tensorflow/compiler/mlir/lite/ir/tfl_ops.h"  // IWYU pragma: keep
-#include "xla/mlir_hlo/mhlo/IR/hlo_ops.h"  // IWYU pragma: keep
 
 namespace mlir {
-namespace odml {
+namespace TFL {
 
 namespace {
 
@@ -44,13 +44,13 @@ class ConvertResultsBroadcastableShapeOp : public RewritePattern {
   explicit ConvertResultsBroadcastableShapeOp(MLIRContext* context)
       : RewritePattern(MatchAnyOpTypeTag(), 1, context) {}
 
-  LogicalResult matchAndRewrite(Operation* op,
+  LogicalResult matchAndRewrite(mlir::Operation* op,
                                 PatternRewriter& rewriter) const override;
 
  protected:
   LogicalResult RewriteOp(
-      Operation* op, PatternRewriter& rewriter,
-      const std::function<bool(ArrayRef<int64_t>, ArrayRef<int64_t>,
+      mlir::Operation* op, PatternRewriter& rewriter,
+      const std::function<bool(llvm::ArrayRef<int64_t>, llvm::ArrayRef<int64_t>,
                                SmallVectorImpl<int64_t>&)>&
           get_broadcasted_shape) const;
 };
@@ -61,10 +61,12 @@ class ConvertResultsBroadcastableShapeOp : public RewritePattern {
 // into a standard (not runtime verification) trait and change this function to
 // use only that interface. Curently there is no way to query derived runtime
 // verification traits.
-bool IsRankSupported(Operation* op) {
+bool IsRankSupported(mlir::Operation* op) {
   // These ops have no rank constraints.
   if (llvm::isa<TFL::AddOp, TFL::SubOp, TFL::MulOp>(op)) {
-    return true;
+    // TFL_AddOp, TFL_SubOp, and TFL_MulOp support implicit broadcasting up to
+    // rank 6.
+    return llvm::cast<mlir::ShapedType>(op->getResultTypes()[0]).getRank() <= 6;
   }
 
   if (auto div_op = llvm::dyn_cast_or_null<TFL::DivOp>(op)) {
@@ -72,54 +74,78 @@ bool IsRankSupported(Operation* op) {
   }
 
   // Fallback, all implicit broadcast ops in tfl support at least rank 4.
-  return llvm::cast<ShapedType>(op->getResultTypes()[0]).getRank() <= 4;
+  return llvm::cast<mlir::ShapedType>(op->getResultTypes()[0]).getRank() <= 4;
+}
+
+bool IsBroadcastLikeOp(mlir::Operation* op) {
+  return llvm::isa<TFL::BroadcastToOp>(op);
+}
+
+mlir::Value GetBroadcastLikeOpInput(mlir::Operation* op) {
+  if (auto broadcast_to_op = llvm::dyn_cast<TFL::BroadcastToOp>(op)) {
+    return broadcast_to_op.getInput();
+  }
+  return nullptr;
 }
 
 LogicalResult ConvertResultsBroadcastableShapeOp::matchAndRewrite(
-    Operation* op, PatternRewriter& rewriter) const {
+    mlir::Operation* op, PatternRewriter& rewriter) const {
   if (op->hasTrait<OpTrait::ResultsBroadcastableShape>())
     return RewriteOp(op, rewriter, OpTrait::util::getBroadcastedShape);
   return failure();
 }
 
 LogicalResult ConvertResultsBroadcastableShapeOp::RewriteOp(
-    Operation* op, PatternRewriter& rewriter,
-    const std::function<bool(ArrayRef<int64_t>, ArrayRef<int64_t>,
+    mlir::Operation* op, PatternRewriter& rewriter,
+    const std::function<bool(llvm::ArrayRef<int64_t>, llvm::ArrayRef<int64_t>,
                              SmallVectorImpl<int64_t>&)>& get_broadcasted_shape)
     const {
   if (op->getNumOperands() != 2 || op->getResultTypes().size() != 1)
-    return failure();
+    return rewriter.notifyMatchFailure(
+        op, "Operand broadcasting not supported for op: " +
+                op->getName().getStringRef());
 
   // Check that the result shape is fully defined.
   auto result_type =
-      mlir::dyn_cast_or_null<RankedTensorType>(op->getResultTypes().front());
-  if (!result_type || !result_type.hasStaticShape()) return failure();
+      llvm::dyn_cast_or_null<RankedTensorType>(op->getResultTypes().front());
+  if (!result_type || !result_type.hasStaticShape())
+    return rewriter.notifyMatchFailure(
+        op, "Unsupported result shape for broadcasting on op: " +
+                op->getName().getStringRef());
 
   if (!IsRankSupported(op)) {
-    return failure();
+    return rewriter.notifyMatchFailure(
+        op, "Unsupported rank for broadcasting on op: " +
+                op->getName().getStringRef());
   }
 
   bool changed = false;
   for (uint64_t i = 0, e = op->getNumOperands(); i < e; ++i) {
-    // Check that the i'th operand is a broadcast.
-    auto broadcast = llvm::dyn_cast_or_null<TFL::BroadcastToOp>(
-        op->getOpOperand(i).get().getDefiningOp());
-    if (!broadcast) continue;
+    // Check that the i'th operand is a broadcast-like op.
+    auto broadcast_like_op = op->getOpOperand(i).get().getDefiningOp();
+    if (!broadcast_like_op || !IsBroadcastLikeOp(broadcast_like_op)) continue;
+
+    // Get the input of the broadcast-like op. This is the mlir::Value that is
+    // being broadcasted by the broadcast-like op.
+    auto broadcast_like_op_input = GetBroadcastLikeOpInput(broadcast_like_op);
+    if (!broadcast_like_op_input) {
+      continue;
+    }
 
     // Check that the operand of the broadcast has fully defined shape.
-    auto broadcast_arg_type = mlir::dyn_cast_or_null<RankedTensorType>(
-        broadcast.getInput().getType());
+    auto broadcast_arg_type = llvm::dyn_cast_or_null<RankedTensorType>(
+        broadcast_like_op_input.getType());
     if (!broadcast_arg_type || !broadcast_arg_type.hasStaticShape()) continue;
 
     // Check that the other argument has fully defined shape.
-    auto argument_type = mlir::dyn_cast_or_null<RankedTensorType>(
+    auto other_arg_type = llvm::dyn_cast_or_null<RankedTensorType>(
         op->getOpOperand(1 - i).get().getType());
-    if (!argument_type || !argument_type.hasStaticShape()) continue;
+    if (!other_arg_type || !other_arg_type.hasStaticShape()) continue;
 
     // Get the unbroadcasted shapes in the operand order.
     std::array<llvm::ArrayRef<int64_t>, 2> operand_shapes;
     operand_shapes[i] = broadcast_arg_type.getShape();
-    operand_shapes[1 - i] = argument_type.getShape();
+    operand_shapes[1 - i] = other_arg_type.getShape();
 
     // Check that the input of the broadcast and the other operand is broadcast
     // compatible.
@@ -134,7 +160,7 @@ LogicalResult ConvertResultsBroadcastableShapeOp::RewriteOp(
 
     // Update the operand of the op to be the operand of the broadcast.
     rewriter.modifyOpInPlace(
-        op, [&]() { op->getOpOperand(i).set(broadcast.getInput()); });
+        op, [&]() { op->getOpOperand(i).set(broadcast_like_op_input); });
     changed = true;
   }
   return success(changed);
@@ -146,22 +172,22 @@ class ConvertResultsBroadcastableBatchMatMulShapeOp
   explicit ConvertResultsBroadcastableBatchMatMulShapeOp(MLIRContext* context)
       : ConvertResultsBroadcastableShapeOp(context) {}
 
-  LogicalResult matchAndRewrite(Operation* op,
+  LogicalResult matchAndRewrite(mlir::Operation* op,
                                 PatternRewriter& rewriter) const override;
 
  private:
-  LogicalResult RewriteOp(Operation* op, PatternRewriter& rewriter) const;
+  LogicalResult RewriteOp(mlir::Operation* op, PatternRewriter& rewriter) const;
 };
 
 LogicalResult ConvertResultsBroadcastableBatchMatMulShapeOp::matchAndRewrite(
-    Operation* op, PatternRewriter& rewriter) const {
+    mlir::Operation* op, PatternRewriter& rewriter) const {
   if (succeeded(RewriteOp(op, rewriter))) return success();
 
   return failure();
 }
 
 LogicalResult ConvertResultsBroadcastableBatchMatMulShapeOp::RewriteOp(
-    Operation* op, PatternRewriter& rewriter) const {
+    mlir::Operation* op, PatternRewriter& rewriter) const {
   auto matmul_op = llvm::dyn_cast<TFL::BatchMatMulOp>(op);
   if (!matmul_op) return failure();
 
@@ -169,7 +195,7 @@ LogicalResult ConvertResultsBroadcastableBatchMatMulShapeOp::RewriteOp(
   // shape of op's first/left-hand-side operand and `shape_y` is the shape of
   // op's second/right-hand-side operand.
   const auto get_broadcasted_shape =
-      [&](ArrayRef<int64_t> shape_x, ArrayRef<int64_t> shape_y,
+      [&](llvm::ArrayRef<int64_t> shape_x, llvm::ArrayRef<int64_t> shape_y,
           SmallVectorImpl<int64_t>& result_shape) {
         if (shape_x.size() < 2 || shape_y.size() < 2) {
           return false;
@@ -210,34 +236,18 @@ LogicalResult ConvertResultsBroadcastableBatchMatMulShapeOp::RewriteOp(
 
 }  // namespace
 
-class FoldBroadcastToPass
-    : public PassWrapper<FoldBroadcastToPass, OperationPass<func::FuncOp>> {
- public:
-  StringRef getArgument() const final { return "fold-broadcast-to-pass"; }
-  StringRef getDescription() const final {
-    return "Folds tfl.BroadcastTo nodes with subsequent ops";
+void OptimizeBroadcastLikePass::runOnOperation() {
+  RewritePatternSet patterns(&getContext());
+  auto func = getOperation();
+
+  patterns.add<ConvertResultsBroadcastableShapeOp>(func.getContext());
+  patterns.add<ConvertResultsBroadcastableBatchMatMulShapeOp>(
+      func.getContext());
+  if (failed(
+          applyPatternsAndFoldGreedily(getOperation(), std::move(patterns)))) {
+    return signalPassFailure();
   }
-
-  void runOnOperation() override {
-    RewritePatternSet patterns(&getContext());
-    auto func = getOperation();
-
-    patterns.add<ConvertResultsBroadcastableShapeOp>(func.getContext());
-    patterns.add<ConvertResultsBroadcastableBatchMatMulShapeOp>(
-        func.getContext());
-    if (failed(applyPatternsAndFoldGreedily(getOperation(),
-                                            std::move(patterns)))) {
-      return signalPassFailure();
-    }
-  }
-};
-
-// TODO(weiyiw): Consider having this as canonicalization?
-std::unique_ptr<OperationPass<func::FuncOp>> CreateFoldBroadcastToPass() {
-  return std::make_unique<FoldBroadcastToPass>();
 }
 
-static PassRegistration<FoldBroadcastToPass> pass;
-
-}  // namespace odml
+}  // namespace TFL
 }  // namespace mlir
