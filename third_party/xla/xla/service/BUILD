@@ -6328,4 +6328,43 @@ xla_cc_test(
     ],
 )
 
+cc_library(
+    name = "op_cost",
+    srcs = ["op_cost.cc"],
+    hdrs = ["op_cost.h"],
+    deps = [
+        ":hlo_cost_analysis",
+        "//xla:shape_util",
+        "//xla/hlo/ir:hlo",
+        "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/functional:any_invocable",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:string_view",
+    ],
+)
+
+xla_cc_test(
+    name = "op_cost_test",
+    srcs = ["op_cost_test.cc"],
+    deps = [
+        ":hlo_cost_analysis",
+        ":hlo_runner",
+        ":op_cost",
+        ":platform_util",
+        "//xla:shape_util",
+        "//xla/hlo/ir:hlo",
+        "//xla/tests:new_hlo_test_base",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_googletest//:gtest_main",
+        "@local_tsl//tsl/platform:statusor",
+        "@local_tsl//tsl/platform:test",
+    ],
+)
+
 exports_files(["xla_aot_compile_test_gpu_target_config.prototxt"])
