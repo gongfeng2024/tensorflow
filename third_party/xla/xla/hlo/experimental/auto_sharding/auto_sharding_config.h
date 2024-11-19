@@ -23,6 +23,7 @@ limitations under the License.
 #include "xla/xla_data.pb.h"
 
 namespace xla {
+namespace spmd {
 
 // Node's sharding config, where sharding represents the sharding for a
 // non-tuple, and nodes[i] represents the sharding for the i-th tuple element.
@@ -42,6 +43,7 @@ struct ShardingConfig {
   }
 };
 
+}  // namespace spmd
 }  // namespace xla
 
 #endif  // XLA_HLO_EXPERIMENTAL_AUTO_SHARDING_AUTO_SHARDING_CONFIG_H_
